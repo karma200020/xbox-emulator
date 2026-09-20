@@ -14,6 +14,14 @@ import {
   type MouseSettings,
   type Target,
 } from "./profile-schema";
+import { searchProfiles } from "./game-profile";
+import {
+  DEFAULT_OVERLAY_SHORTCUT,
+  OVERLAY_SHORTCUT_STORAGE_KEY,
+  OVERLAY_SHORTCUTS,
+  parseOverlayShortcut,
+  type OverlayShortcutId,
+} from "./overlay-shortcut";
 import {
   addCalibrationSample,
   addTarget,
@@ -28,6 +36,8 @@ import {
 const elements = {
   status: requireElement<HTMLDivElement>("status"),
   profile: requireElement<HTMLSelectElement>("profile"),
+  profileSearch: requireElement<HTMLInputElement>("profile-search"),
+  overlayShortcut: requireElement<HTMLSelectElement>("overlay-shortcut"),
   name: requireElement<HTMLInputElement>("profile-name"),
   id: requireElement<HTMLInputElement>("profile-id"),
   responseMode: requireElement<HTMLSelectElement>("response-mode"),
@@ -64,6 +74,7 @@ let dirty = false;
 let calibrationSamples: CalibrationSample[] = [];
 let calibrationActive = false;
 let currentSuggestion: number | null = null;
+let overlayShortcut: OverlayShortcutId = DEFAULT_OVERLAY_SHORTCUT;
 
 requireElement<HTMLButtonElement>("save").addEventListener("click", () => void save());
 requireElement<HTMLButtonElement>("reset").addEventListener("click", () => void reset());
@@ -86,6 +97,11 @@ elements.profile.addEventListener("change", () => {
   documentState.active_profile_id = selectedProfileId;
   dirty = true;
   render();
+});
+elements.profileSearch.addEventListener("input", renderProfileList);
+elements.overlayShortcut.addEventListener("change", () => {
+  overlayShortcut = parseOverlayShortcut(elements.overlayShortcut.value);
+  markPendingEdit();
 });
 
 for (const input of [
@@ -238,7 +254,11 @@ void load();
 
 async function load(): Promise<void> {
   try {
-    const stored = await chrome.storage.local.get(PROFILE_STORAGE_KEY);
+    const stored = await chrome.storage.local.get([
+      PROFILE_STORAGE_KEY,
+      OVERLAY_SHORTCUT_STORAGE_KEY,
+    ]);
+    overlayShortcut = parseOverlayShortcut(stored[OVERLAY_SHORTCUT_STORAGE_KEY]);
     const raw = stored[PROFILE_STORAGE_KEY] as unknown;
     if (raw === undefined) {
       await persist(documentState);
@@ -267,8 +287,10 @@ async function load(): Promise<void> {
 
 function render(): void {
   const profile = selectedProfile();
-  elements.profile.replaceChildren(
-    ...documentState.profiles.map((item) => option(item.id, item.name, item.id === profile.id)),
+  renderProfileList();
+  elements.overlayShortcut.replaceChildren(
+    ...Object.entries(OVERLAY_SHORTCUTS).map(([id, shortcut]) =>
+      option(id, shortcut.label, id === overlayShortcut)),
   );
   elements.name.value = profile.name;
   elements.id.value = profile.id;
@@ -288,6 +310,15 @@ function render(): void {
   renderBindings(elements.mouse, profile.mouse_bindings, true);
   renderConflicts(profile);
   requireElement<HTMLButtonElement>("delete-profile").disabled = documentState.profiles.length === 1;
+}
+
+function renderProfileList(): void {
+  const visible = searchProfiles(documentState.profiles, elements.profileSearch.value);
+  const selected = selectedProfile();
+  if (!visible.some(({ id }) => id === selected.id)) visible.unshift(selected);
+  elements.profile.replaceChildren(
+    ...visible.map((item) => option(item.id, item.name, item.id === selected.id)),
+  );
 }
 
 function renderBindings(
@@ -475,7 +506,7 @@ async function save(): Promise<void> {
 }
 
 async function reset(): Promise<void> {
-  if (!window.confirm("Replace every local profile with the three starter profiles?")) return;
+  if (!window.confirm("Replace every local profile with the bundled generic presets?")) return;
   const replacement = createStarterProfiles();
   try {
     await persist(replacement);
@@ -532,7 +563,10 @@ function exportProfiles(): void {
 async function persist(value: ProfileDocument): Promise<void> {
   const result = parseProfileDocument(value);
   if (!result.ok) throw new Error(result.errors.join(" "));
-  await chrome.storage.local.set({ [PROFILE_STORAGE_KEY]: result.value });
+  await chrome.storage.local.set({
+    [PROFILE_STORAGE_KEY]: result.value,
+    [OVERLAY_SHORTCUT_STORAGE_KEY]: overlayShortcut,
+  });
 }
 
 function changed(rerender = false): void {

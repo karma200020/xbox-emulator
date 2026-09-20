@@ -26,6 +26,9 @@
       <div id="status" class="status" role="status" aria-live="polite"></div>
       <section class="profile-bar" aria-labelledby="profile-heading">
         <div>
+          <label for="profile-search">Search local presets
+            <input id="profile-search" type="search" placeholder="FPS, racing, accessibility…">
+          </label>
           <label id="profile-heading" for="profile">Profile</label>
           <select id="profile"></select>
         </div>
@@ -42,6 +45,14 @@
             <label>Name <input id="profile-name" maxlength="60" required></label>
             <label>Profile ID <input id="profile-id" maxlength="40" pattern="[a-z0-9][a-z0-9_-]*" required></label>
           </div>
+        </section>
+
+        <section class="card" aria-labelledby="overlay-heading">
+          <h2 id="overlay-heading">In-game quick overlay</h2>
+          <label>Shortcut
+            <select id="overlay-shortcut"></select>
+            <span class="help">The overlay shortcut is separate from Ctrl+Alt+G and Escape. Opening it never starts capture.</span>
+          </label>
         </section>
 
         <section class="card" aria-labelledby="aim-heading">
@@ -122,7 +133,7 @@
               <div class="section-title">
                 <div>
                   <h2 id="games-heading">Game associations</h2>
-                  <p class="help">Optional normalized metadata for future profile selection. This version does not inspect pages or switch profiles automatically.</p>
+                  <p class="help">Optional local metadata for conservative URL-based selection. Product IDs match first; normalized title names and aliases are used only when the match is unique.</p>
                 </div>
                 <button id="add-game" type="button" class="secondary">Add game</button>
               </div>

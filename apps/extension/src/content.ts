@@ -6,6 +6,15 @@ import {
 } from "./protocol";
 import { connectPageBridge } from "./page-bridge";
 import { isXboxPlayUrl } from "./xbox-url";
+import { parseXcloudGameIdentity } from "./game-profile";
+import {
+  DEFAULT_OVERLAY_SHORTCUT,
+  OVERLAY_SHORTCUT_STORAGE_KEY,
+  matchesOverlayShortcut,
+  parseOverlayShortcut,
+  type OverlayShortcutId,
+} from "./overlay-shortcut";
+import { parseOverlayState, QuickOverlay } from "./quick-overlay";
 
 const FLUSH_INTERVAL_MS = 8;
 
@@ -22,9 +31,26 @@ let captureGeneration = 0;
 let lastHeartbeat = 0;
 let lastWorkerHeartbeat = 0;
 let activationPending = false;
+let overlayShortcut: OverlayShortcutId = DEFAULT_OVERLAY_SHORTCUT;
+let observedHref = "";
+let pendingAmbiguousState: Extract<RuntimeMessage, { type: "overlay_state" }> | null = null;
 
-chrome.runtime.onMessage.addListener((rawMessage: unknown, _sender, sendResponse) => {
-  if (!isRuntimeMessage(rawMessage)) return;
+const quickOverlay = new QuickOverlay(document, {
+  getState: () => requestOverlayState({ type: "get_overlay_state" }),
+  selectProfile: (profileId, associate) => requestOverlayState({
+    type: "select_profile",
+    profile_id: profileId,
+    associate,
+  }),
+  saveSensitivity: (profileId, values) => requestOverlayState({
+    type: "update_profile_sensitivity",
+    profile_id: profileId,
+    ...values,
+  }),
+});
+
+chrome.runtime.onMessage.addListener((rawMessage: unknown, sender, sendResponse) => {
+  if (!isExtensionSender(sender) || !isRuntimeMessage(rawMessage)) return;
   if (rawMessage.type === "arm_capture") armCapture();
   if (rawMessage.type === "stop_capture") stopCapture(rawMessage.reason);
   if (rawMessage.type === "browser_activate") {
@@ -41,6 +67,18 @@ chrome.runtime.onMessage.addListener((rawMessage: unknown, _sender, sendResponse
   if (rawMessage.type === "browser_deactivate") {
     browserActive = false;
     bridge({ command: "deactivate" });
+  }
+  if (rawMessage.type === "overlay_state") {
+    pendingAmbiguousState = rawMessage.match === "ambiguous" ? rawMessage : null;
+    if (quickOverlay.isOpen()) {
+      void quickOverlay.refresh(rawMessage);
+    } else if (rawMessage.match === "ambiguous" && !active && !activationPending) {
+      const parent = overlayParent();
+      if (parent) {
+        pendingAmbiguousState = null;
+        void quickOverlay.show(parent, rawMessage, false);
+      }
+    }
   }
 });
 
@@ -68,6 +106,18 @@ async function activateBrowser(
 window.addEventListener("blur", () => stopCapture("window_blur"));
 window.addEventListener("pagehide", () => stopCapture("page_hidden"));
 window.addEventListener("keydown", onCaptureShortcut, true);
+window.addEventListener("popstate", observeNavigation);
+window.addEventListener("hashchange", observeNavigation);
+window.setInterval(observeNavigation, 500);
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local" && OVERLAY_SHORTCUT_STORAGE_KEY in changes) {
+    overlayShortcut = parseOverlayShortcut(changes[OVERLAY_SHORTCUT_STORAGE_KEY]?.newValue);
+  }
+});
+void chrome.storage.local.get(OVERLAY_SHORTCUT_STORAGE_KEY).then((stored) => {
+  overlayShortcut = parseOverlayShortcut(stored[OVERLAY_SHORTCUT_STORAGE_KEY]);
+}).catch(reportRuntimeFailure);
+observeNavigation();
 document.addEventListener("fullscreenchange", () => {
   if (active || activationPending) return;
   if (document.fullscreenElement && isXboxPlayUrl(location.href)) {
@@ -146,18 +196,59 @@ function overlayParent(): Element | null {
 
 function onCaptureShortcut(event: KeyboardEvent): void {
   if (!event.isTrusted || !isXboxPlayUrl(location.href) || document.hidden || !document.hasFocus()) return;
+  if (matchesOverlayShortcut(event, overlayShortcut)) {
+    preventDefault(event);
+    if (event.repeat) return;
+    void toggleQuickOverlay();
+    return;
+  }
+  if (event.code === "Escape" && quickOverlay.isOpen()) {
+    preventDefault(event);
+    quickOverlay.close();
+    if (active || armed || activationPending) stopCapture("escape");
+    return;
+  }
   if (event.code === "Escape" && armed) {
+    quickOverlay.close();
     stopCapture("escape");
     return;
   }
   if (event.code !== "KeyG" || !event.ctrlKey || !event.altKey || event.metaKey || event.shiftKey) return;
   preventDefault(event);
   if (event.repeat) return;
+  quickOverlay.close();
   if (active || activationPending) {
     stopCapture("keyboard_shortcut");
   } else {
     armed = true;
     void activateCapture();
+  }
+}
+
+async function toggleQuickOverlay(): Promise<void> {
+  if (quickOverlay.isOpen()) {
+    quickOverlay.close();
+    return;
+  }
+  if (armed || active || activationPending) stopCapture("quick_overlay");
+  pendingAmbiguousState = null;
+  let parent = overlayParent();
+  if (!parent && document.fullscreenElement && typeof document.exitFullscreen === "function") {
+    await document.exitFullscreen();
+    parent = document.documentElement;
+  }
+  if (parent) await quickOverlay.show(parent);
+}
+
+function observeNavigation(): void {
+  if (location.href === observedHref) return;
+  observedHref = location.href;
+  pendingAmbiguousState = null;
+  const identity = parseXcloudGameIdentity(location.href);
+  void send({ type: "game_identity_changed", identity }).catch(reportRuntimeFailure);
+  if (!isXboxPlayUrl(location.href)) {
+    quickOverlay.close();
+    stopCapture("tab_navigated");
   }
 }
 
@@ -205,6 +296,14 @@ function stopCapture(reason: string): void {
     document.exitPointerLock();
   }
   if (wasActive) void send({ type: "capture_stopped", reason }).catch(reportRuntimeFailure);
+  if (reason !== "quick_overlay" && pendingAmbiguousState) {
+    const pending = pendingAmbiguousState;
+    const parent = overlayParent();
+    if (parent) {
+      pendingAmbiguousState = null;
+      void quickOverlay.show(parent, pending, false);
+    }
+  }
 }
 
 function bridge(detail: Readonly<Record<string, unknown>>): void {
@@ -250,6 +349,7 @@ function removeInputListeners(): void {
 function onKey(event: KeyboardEvent): void {
   if (!active || !event.isTrusted) return;
   if (event.code === "Escape") {
+    quickOverlay.close();
     stopCapture("escape");
     return;
   }
@@ -341,6 +441,16 @@ function sendInputEvents(inputEvents: InputEvent[]): void {
 
 function send(message: RuntimeMessage): Promise<unknown> {
   return Promise.resolve().then(() => chrome.runtime.sendMessage(message));
+}
+
+async function requestOverlayState(message: RuntimeMessage): Promise<
+  Extract<RuntimeMessage, { type: "overlay_state" }> | null
+> {
+  return parseOverlayState(await send(message));
+}
+
+function isExtensionSender(sender: chrome.runtime.MessageSender): boolean {
+  return sender.id === chrome.runtime.id && sender.tab === undefined;
 }
 
 function reportRuntimeFailure(error: unknown): void {

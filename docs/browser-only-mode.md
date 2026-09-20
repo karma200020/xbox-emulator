@@ -17,6 +17,9 @@ administrator access, or controller driver.
   deactivation stop capture and return all controls to neutral.
 - Input and profiles remain local. There is no telemetry, advertising, remote
   code, cloud sync, or network client.
+- Game detection reads only the current URL's stable-style
+  `/play/games/<title-slug>/<productId>` route and SPA URL changes. It does not
+  inspect arbitrary DOM, authentication state, or Xbox network traffic.
 - The release manifest does not request Native Messaging permission.
 
 The isolated extension script transfers a `MessageChannel` to the MAIN-world
@@ -42,7 +45,9 @@ capture. Profile replacement clears held state before applying new bindings.
 The activation button is placed inside the fullscreen game container and uses
 the browser's popover top layer. Entering site fullscreen shows the button while
 inactive; click it to grant pointer lock. Native video/canvas fullscreen cannot
-render the HTML prompt: use **Ctrl+Alt+G** instead. The shortcut also works in
+render the HTML prompt: use **Ctrl+Alt+G** instead. **Ctrl+Alt+P** opens the
+quick overlay by leaving native fullscreen first; its shortcut can be changed
+in the profile editor. The capture shortcut also works in
 browser fullscreen (F11), which does not fire the site's `fullscreenchange`
 event. The shortcut is reserved for capture control and is not forwarded to
 the mapper.
@@ -69,8 +74,10 @@ source keeps hip response active. Version 1 documents migrate locally by copying
 their former mouse settings to both modes, disabling smoothing and velocity
 scaling, and leaving ADS activation and game associations unset. This preserves
 their prior mapping behavior. Import and export remain local JSON operations,
-and unknown fields, ambiguous game associations, unsupported sources, and
-non-finite or out-of-range values are rejected before save or activation.
+and unknown fields, duplicate product IDs, unsupported sources, and non-finite
+or out-of-range values are rejected before save or activation. Ambiguous names
+are retained so the user can resolve them explicitly instead of the extension
+guessing.
 
 For each input batch and axis, response processing is deterministic:
 
@@ -88,9 +95,16 @@ reset, capture loss, and deactivation also clear it. Smoothing therefore never
 extends input after capture stops. Sensitivity is bounded to `0.001-0.2`,
 deadzone and smoothing to `0-0.95`, and velocity scaling to `0-4`.
 
-Profiles may contain normalized lowercase title IDs, title names, and aliases.
-They are metadata only in this layer: the extension does not inspect the xCloud
-DOM, detect the running title, or automatically select a profile.
+Profiles may contain normalized lowercase product IDs, title names, and aliases.
+A unique exact product ID or explicit name/alias match selects the profile
+locally. Product IDs take precedence. Ambiguous alias matches never select a
+profile automatically; the quick overlay shows the candidates, and the user's
+choice is saved as an exact product association. Switching while capture is
+active neutralizes held controller state before applying the replacement.
+
+The bundled preset catalog contains generic, offline-only FPS,
+third-person/action, racing, platformer, and one-handed accessibility mappings.
+Preset search filters local profile data and performs no network request.
 
 Chrome 120 or newer is the minimum declared version. Current Chrome and Edge
 must each pass live xCloud testing before a store release or game-compatibility

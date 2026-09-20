@@ -158,7 +158,14 @@ export function parseSelectedProfile(input: unknown): SelectedProfileResult {
 }
 
 export function createStarterProfiles(): ProfileDocument {
-  const profiles = [defaultProfile(), fpsProfile(), racingProfile()];
+  const profiles = [
+    defaultProfile(),
+    fpsProfile(),
+    racingProfile(),
+    actionProfile(),
+    platformerProfile(),
+    oneHandedProfile(),
+  ];
   return {
     schema_version: PROFILE_SCHEMA_VERSION,
     active_profile_id: profiles[0]!.id,
@@ -423,20 +430,12 @@ function validateGameConflicts(profiles: unknown[], errors: string[]): void {
     const profileId = profile.id;
     profile.game_associations.forEach((association) => {
       if (!isRecord(association)) return;
-      const values = [
-        typeof association.title_id === "string" ? `id:${association.title_id}` : null,
-        typeof association.title_name === "string" ? `name:${association.title_name}` : null,
-        ...(Array.isArray(association.aliases)
-          ? association.aliases.map((alias) => typeof alias === "string" ? `name:${alias}` : null)
-          : []),
-      ].filter((value): value is string => value !== null);
-      for (const value of values) {
-        const owner = owners.get(value);
-        if (owner && owner !== profileId) {
-          errors.push(`Game association "${value.slice(value.indexOf(":") + 1)}" is assigned to multiple profiles.`);
-        } else {
-          owners.set(value, profileId);
-        }
+      if (typeof association.title_id !== "string") return;
+      const owner = owners.get(association.title_id);
+      if (owner && owner !== profileId) {
+        errors.push(`Game product id "${association.title_id}" is assigned to multiple profiles.`);
+      } else {
+        owners.set(association.title_id, profileId);
       }
     });
   });
@@ -607,6 +606,77 @@ function racingProfile(): Profile {
       "2": target("b"),
     },
     mouse: mouseModes(mouse(0.012, 0.08, "exponential")),
+    game_associations: [],
+  };
+}
+
+function actionProfile(): Profile {
+  const profile = defaultProfile();
+  return {
+    ...profile,
+    id: "action",
+    name: "Third-person / Action",
+    key_bindings: {
+      ...profile.key_bindings,
+      ControlLeft: target("b"),
+      KeyF: target("x"),
+      KeyC: target("right_thumb"),
+    },
+    mouse: mouseModes(mouse(0.02, 0.03, "precision"), { type: "mouse_button", button: 2 }),
+  };
+}
+
+function platformerProfile(): Profile {
+  return {
+    id: "platformer",
+    name: "Platformer",
+    key_bindings: {
+      KeyW: ["left_y_positive"],
+      KeyS: ["left_y_negative"],
+      KeyA: ["left_x_negative"],
+      KeyD: ["left_x_positive"],
+      Space: target("a"),
+      ShiftLeft: target("x"),
+      KeyE: target("b"),
+      KeyQ: target("y"),
+      Enter: target("start"),
+      Tab: target("back"),
+    },
+    mouse_bindings: {
+      "0": target("a"),
+      "2": target("x"),
+    },
+    mouse: mouseModes(mouse(0.014, 0.02, "linear")),
+    game_associations: [],
+  };
+}
+
+function oneHandedProfile(): Profile {
+  return {
+    id: "one-handed",
+    name: "Accessibility: One-handed",
+    key_bindings: {
+      KeyW: ["left_y_positive"],
+      KeyS: ["left_y_negative"],
+      KeyA: ["left_x_negative"],
+      KeyD: ["left_x_positive"],
+      KeyQ: target("a"),
+      KeyE: target("b"),
+      KeyR: target("x"),
+      KeyF: target("y"),
+      KeyZ: target("left_shoulder"),
+      KeyX: target("right_shoulder"),
+      Enter: target("start"),
+      Tab: target("back"),
+    },
+    mouse_bindings: {
+      "0": ["right_trigger"],
+      "1": target("right_thumb"),
+      "2": ["left_trigger"],
+      "3": target("a"),
+      "4": target("b"),
+    },
+    mouse: mouseModes(mouse(0.016, 0.04, "precision"), { type: "mouse_button", button: 2 }),
     game_associations: [],
   };
 }

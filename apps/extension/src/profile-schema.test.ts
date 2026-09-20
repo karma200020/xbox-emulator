@@ -18,7 +18,9 @@ describe("profile schema", () => {
   it("accepts all built-in starter profiles", () => {
     const result = parseProfileDocument(createStarterProfiles());
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.profiles.map(({ id }) => id)).toEqual(["default", "fps", "racing"]);
+    if (result.ok) expect(result.value.profiles.map(({ id }) => id)).toEqual([
+      "default", "fps", "racing", "action", "platformer", "one-handed",
+    ]);
   });
 
   it("rejects unknown fields and unsafe numeric values", () => {
@@ -133,7 +135,7 @@ describe("profile schema", () => {
     }
   });
 
-  it("validates normalized game metadata and rejects cross-profile conflicts", () => {
+  it("validates normalized game metadata and rejects product-id conflicts", () => {
     const document = createStarterProfiles();
     document.profiles[0]!.game_associations = [{
       title_id: "halo-infinite",
@@ -141,15 +143,16 @@ describe("profile schema", () => {
       aliases: ["halo 6"],
     }];
     document.profiles[1]!.game_associations = [{
-      title_id: "other-id",
+      title_id: "halo-infinite",
       title_name: "other game",
       aliases: ["halo infinite"],
     }];
     const conflict = parseProfileDocument(document);
     expect(conflict.ok).toBe(false);
     if (!conflict.ok) {
-      expect(conflict.errors).toContain('Game association "halo infinite" is assigned to multiple profiles.');
+      expect(conflict.errors).toContain('Game product id "halo-infinite" is assigned to multiple profiles.');
     }
+    document.profiles[1]!.game_associations[0]!.title_id = "other-id";
     document.profiles[1]!.game_associations[0]!.aliases = ["Halo"];
     const notNormalized = parseProfileDocument(document);
     expect(notNormalized.ok).toBe(false);

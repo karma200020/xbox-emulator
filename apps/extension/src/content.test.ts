@@ -2,6 +2,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const connection = vi.hoisted(() => ({ connect: vi.fn() }));
 vi.mock("./page-bridge", () => ({ connectPageBridge: connection.connect }));
+const quick = vi.hoisted(() => ({
+  show: vi.fn(async () => {}),
+  close: vi.fn(),
+  refresh: vi.fn(async () => {}),
+  isOpen: vi.fn(() => false),
+}));
+vi.mock("./quick-overlay", () => ({
+  QuickOverlay: class {
+    show = quick.show;
+    close = quick.close;
+    refresh = quick.refresh;
+    isOpen = quick.isOpen;
+  },
+  parseOverlayState: (value: any) => value?.type === "overlay_state" ? value : null,
+}));
 
 class Target {
   handlers = new Map<string, Set<(event: any) => void>>();
@@ -25,7 +40,8 @@ describe("content capture lifecycle", () => {
   let post: ReturnType<typeof vi.fn>;
   let send: ReturnType<typeof vi.fn>;
   const input = () => ({ isTrusted: true, preventDefault: vi.fn(), stopImmediatePropagation: vi.fn() });
-  const runtime = (message: object) => listener(message, {}, vi.fn());
+  const runtime = (message: object, sender: object = { id: "extension-id" }) =>
+    listener(message, sender, vi.fn());
 
   async function start() {
     runtime({ type: "arm_capture" });
@@ -35,7 +51,11 @@ describe("content capture lifecycle", () => {
   async function browser() {
     const { createStarterProfiles } = await import("./profile-schema");
     const reply = vi.fn();
-    listener({ type: "browser_activate", profile: createStarterProfiles().profiles[0] }, {}, reply);
+    listener(
+      { type: "browser_activate", profile: createStarterProfiles().profiles[0] },
+      { id: "extension-id" },
+      reply,
+    );
     await vi.advanceTimersByTimeAsync(0);
     return reply;
   }
@@ -46,6 +66,8 @@ describe("content capture lifecycle", () => {
     post = vi.fn();
     send = vi.fn(async () => ({}));
     connection.connect.mockReset().mockResolvedValue({ postMessage: post });
+    Object.values(quick).forEach(mock => mock.mockClear());
+    quick.isOpen.mockReturnValue(false);
     root = {
       requestPointerLock: vi.fn(async () => { doc.pointerLockElement = root; }),
       append: vi.fn(),
@@ -67,7 +89,11 @@ describe("content capture lifecycle", () => {
     vi.stubGlobal("window", win);
     vi.stubGlobal("location", { origin: "https://www.xbox.com", href: "https://www.xbox.com/en-US/play" });
     vi.stubGlobal("chrome", { runtime: {
+      id: "extension-id",
       onMessage: { addListener: (fn: typeof listener) => { listener = fn; } }, sendMessage: send,
+    }, storage: {
+      local: { get: vi.fn(async () => ({})) },
+      onChanged: { addListener: vi.fn() },
     } });
     await import("./content");
   });
@@ -131,6 +157,20 @@ describe("content capture lifecycle", () => {
     expect(post).toHaveBeenCalledWith({ command: "deactivate" });
   });
 
+  it("reports stable SPA game-route changes without reading page content", async () => {
+    send.mockClear();
+    location.href = "https://www.xbox.com/en-US/play/games/Test-Game/ABC123";
+    await vi.advanceTimersByTimeAsync(500);
+    expect(send).toHaveBeenCalledWith({
+      type: "game_identity_changed",
+      identity: {
+        product_id: "abc123",
+        title_slug: "test-game",
+        title_name: "test game",
+      },
+    });
+  });
+
   it("keeps the worker informed even while browser input bypasses it", async () => {
     await start();
     await browser();
@@ -170,6 +210,61 @@ describe("content capture lifecycle", () => {
     win.emit("keydown", { ...input(), code: "KeyG", ctrlKey: true, altKey: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(root.requestPointerLock).toHaveBeenCalledOnce();
+  });
+
+  it("opens quick settings with its separate shortcut and neutralizes active capture", async () => {
+    await start();
+    await browser();
+    send.mockClear();
+    win.emit("keydown", {
+      ...input(), code: "KeyP", ctrlKey: true, altKey: true, shiftKey: false, metaKey: false,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(doc.pointerLockElement).toBeNull();
+    expect(send).toHaveBeenCalledWith({ type: "capture_stopped", reason: "quick_overlay" });
+    expect(quick.show).toHaveBeenCalledOnce();
+  });
+
+  it("lets Escape dismiss an inactive quick overlay", () => {
+    quick.isOpen.mockReturnValue(true);
+    const escape = { ...input(), code: "Escape" };
+    win.emit("keydown", escape);
+    expect(quick.close).toHaveBeenCalledOnce();
+    expect(escape.preventDefault).toHaveBeenCalledOnce();
+    expect(root.requestPointerLock).not.toHaveBeenCalled();
+  });
+
+  it("rejects runtime commands that do not come from the extension", () => {
+    runtime({ type: "arm_capture" }, { id: "page-script" });
+    expect(button.showPopover).not.toHaveBeenCalled();
+  });
+
+  it("does not show a stale ambiguous choice after SPA navigation", async () => {
+    const { createStarterProfiles } = await import("./profile-schema");
+    await start();
+    await browser();
+    const document = createStarterProfiles();
+    runtime({
+      type: "overlay_state",
+      identity: { product_id: "first", title_slug: "first-game", title_name: "first game" },
+      match: "ambiguous",
+      candidate_profile_ids: ["default", "fps"],
+      active_profile_id: "default",
+      profiles: document.profiles.map(profile => ({
+        id: profile.id,
+        name: profile.name,
+        hip_x: profile.mouse.hip.sensitivity_x,
+        hip_y: profile.mouse.hip.sensitivity_y,
+        ads_x: profile.mouse.ads.sensitivity_x,
+        ads_y: profile.mouse.ads.sensitivity_y,
+      })),
+      capture_active: true,
+    });
+    expect(quick.show).not.toHaveBeenCalled();
+    location.href = "https://www.xbox.com/en-US/play/games/second-game/SECOND";
+    await vi.advanceTimersByTimeAsync(500);
+    win.emit("keydown", { ...input(), code: "Escape" });
+    expect(quick.show).not.toHaveBeenCalled();
   });
 
   it("uses the shortcut in native video fullscreen instead of an invisible prompt", async () => {

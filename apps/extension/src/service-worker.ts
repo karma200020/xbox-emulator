@@ -12,11 +12,18 @@ import {
   BACKEND_MODE_STORAGE_KEY,
   PROFILE_STORAGE_KEY,
   createStarterProfiles,
+  parseProfileDocument,
   type BackendMode,
   type Profile,
+  type ProfileDocument,
 } from "./profile-schema";
-import { loadSelectedProfile } from "./profile-runtime";
 import { isXboxPlayUrl } from "./xbox-url";
+import {
+  associateGameWithProfile,
+  matchGameProfile,
+  parseXcloudGameIdentity,
+  type GameIdentity,
+} from "./game-profile";
 
 type BridgeStatus = {
   connected: boolean;
@@ -36,6 +43,10 @@ let activeProfile: Profile | null = null;
 let activeTabId: number | null = null;
 let requestedMode: BackendMode = "browser";
 let activationGeneration = 0;
+const detectedGames = new Map<number, GameIdentity | null>();
+const internalProfileWrites = new Set<string>();
+let profileMutationQueue: Promise<void> = Promise.resolve();
+let profileMutationCount = 0;
 let status: BridgeStatus = {
   connected: false,
   active: false,
@@ -65,7 +76,9 @@ async function handleRuntimeMessage(
   switch (message.type) {
     case "capture_started":
       if (!isXboxSender(sender)) return status;
-      await prepareActivation(sender.tab?.id ?? null);
+      detectedGames.set(sender.tab!.id!, identityFromSender(sender));
+      await serializeProfileMutation(() =>
+        prepareActivation(sender.tab!.id!, identityFromSender(sender)));
       return status;
     case "capture_stopped":
       if (!isXboxSender(sender) || sender.tab?.id !== activeTabId) return status;
@@ -101,18 +114,238 @@ async function handleRuntimeMessage(
       });
       return status;
     case "stop_capture":
+      if (!isExtensionPageSender(sender)) return status;
       deactivate(message.reason);
       await broadcastToXboxTabs({ type: "stop_capture", reason: message.reason });
       return status;
     case "get_status":
+      if (!isTrustedExtensionSender(sender)) return status;
       return { type: "status_update", ...status } satisfies RuntimeMessage;
+    case "game_identity_changed":
+      if (!isXboxSender(sender)) return status;
+      if (!sameIdentity(message.identity, identityFromSender(sender))) return status;
+      if (!canManageTab(sender.tab!.id!)) {
+        detectedGames.set(sender.tab!.id!, message.identity);
+        return buildOverlayState(sender.tab!.id!);
+      }
+      await serializeProfileMutation(() =>
+        handleGameIdentity(sender.tab!.id!, message.identity));
+      return buildOverlayState(sender.tab!.id!);
+    case "get_overlay_state":
+      if (!isXboxSender(sender)) return status;
+      detectedGames.set(sender.tab!.id!, identityFromSender(sender));
+      return buildOverlayState(sender.tab!.id!);
+    case "select_profile":
+      if (!isXboxSender(sender) || !canManageTab(sender.tab!.id!)) return status;
+      detectedGames.set(sender.tab!.id!, identityFromSender(sender));
+      return serializeProfileMutation(() =>
+        selectProfileForTab(
+          sender.tab!.id!,
+          message.profile_id,
+          message.associate,
+        ));
+    case "update_profile_sensitivity":
+      if (!isXboxSender(sender) || !canManageTab(sender.tab!.id!)) return status;
+      detectedGames.set(sender.tab!.id!, identityFromSender(sender));
+      return serializeProfileMutation(() =>
+        updateSensitivityForTab(sender.tab!.id!, message));
     default:
       return status;
   }
-
 }
 
-async function prepareActivation(tabId: number | null = activeTabId): Promise<void> {
+async function handleGameIdentity(tabId: number, identity: GameIdentity | null): Promise<void> {
+  detectedGames.set(tabId, identity);
+  if (!identity) return;
+  const document = await loadProfileDocument();
+  if (!document) return;
+  const match = matchGameProfile(document.profiles, identity);
+  if (match.kind === "unique" && document.active_profile_id !== match.profile_ids[0]) {
+    document.active_profile_id = match.profile_ids[0];
+    await persistProfileDocument(document);
+    await applyProfileToActiveCapture(document.profiles.find(
+      ({ id }) => id === document.active_profile_id,
+    )!, tabId);
+  }
+  if (match.kind === "ambiguous") {
+    await sendToTab(tabId, await buildOverlayState(tabId));
+  }
+}
+
+async function selectProfileForTab(
+  tabId: number,
+  profileId: string,
+  associate: boolean,
+): Promise<RuntimeMessage> {
+  const document = await loadProfileDocument();
+  if (!document) return buildUnavailableOverlayState(tabId);
+  let next = structuredClone(document);
+  if (associate) {
+    const identity = detectedGames.get(tabId);
+    if (!identity) return buildOverlayState(tabId);
+    const associated = associateGameWithProfile(next, identity, profileId);
+    if (!associated) return buildOverlayState(tabId);
+    next = associated;
+  } else {
+    if (!next.profiles.some(({ id }) => id === profileId)) return buildOverlayState(tabId);
+    next.active_profile_id = profileId;
+  }
+  const parsed = parseProfileDocument(next);
+  if (!parsed.ok) return buildOverlayState(tabId);
+  await persistProfileDocument(parsed.value);
+  await applyProfileToActiveCapture(
+    parsed.value.profiles.find(({ id }) => id === profileId)!,
+    tabId,
+  );
+  return buildOverlayState(tabId, parsed.value);
+}
+
+async function updateSensitivityForTab(
+  tabId: number,
+  message: Extract<RuntimeMessage, { type: "update_profile_sensitivity" }>,
+): Promise<RuntimeMessage> {
+  const document = await loadProfileDocument();
+  if (!document) return buildUnavailableOverlayState(tabId);
+  const profile = document.profiles.find(({ id }) => id === message.profile_id);
+  if (!profile) return buildOverlayState(tabId, document);
+  profile.mouse.hip.sensitivity_x = message.hip_x;
+  profile.mouse.hip.sensitivity_y = message.hip_y;
+  profile.mouse.ads.sensitivity_x = message.ads_x;
+  profile.mouse.ads.sensitivity_y = message.ads_y;
+  document.active_profile_id = profile.id;
+  const parsed = parseProfileDocument(document);
+  if (!parsed.ok) return buildOverlayState(tabId);
+  await persistProfileDocument(parsed.value);
+  await applyProfileToActiveCapture(profile, tabId);
+  return buildOverlayState(tabId, parsed.value);
+}
+
+async function buildOverlayState(
+  tabId: number,
+  suppliedDocument?: ProfileDocument,
+): Promise<RuntimeMessage> {
+  const document = suppliedDocument ?? await loadProfileDocument();
+  if (!document) return buildUnavailableOverlayState(tabId);
+  const identity = detectedGames.get(tabId) ?? null;
+  const match = identity ? matchGameProfile(document.profiles, identity) :
+    { kind: "unknown" as const, basis: null, profile_ids: [] as [] };
+  return {
+    type: "overlay_state",
+    identity,
+    match: match.kind === "unique" ? "matched" : match.kind,
+    candidate_profile_ids: [...match.profile_ids],
+    active_profile_id: document.active_profile_id,
+    profiles: document.profiles.map((profile) => ({
+      id: profile.id,
+      name: profile.name,
+      hip_x: profile.mouse.hip.sensitivity_x,
+      hip_y: profile.mouse.hip.sensitivity_y,
+      ads_x: profile.mouse.ads.sensitivity_x,
+      ads_y: profile.mouse.ads.sensitivity_y,
+    })),
+    capture_active: status.active && activeTabId === tabId,
+  };
+}
+
+function buildUnavailableOverlayState(tabId: number): RuntimeMessage {
+  const fallback = createStarterProfiles();
+  return {
+    type: "overlay_state",
+    identity: detectedGames.get(tabId) ?? null,
+    match: "unknown",
+    candidate_profile_ids: [],
+    active_profile_id: fallback.active_profile_id,
+    profiles: fallback.profiles.map((profile) => ({
+      id: profile.id,
+      name: profile.name,
+      hip_x: profile.mouse.hip.sensitivity_x,
+      hip_y: profile.mouse.hip.sensitivity_y,
+      ads_x: profile.mouse.ads.sensitivity_x,
+      ads_y: profile.mouse.ads.sensitivity_y,
+    })),
+    capture_active: false,
+  };
+}
+
+async function loadProfileDocument(): Promise<ProfileDocument | null> {
+  try {
+    const stored = await chrome.storage.local.get(PROFILE_STORAGE_KEY);
+    const parsed = parseProfileDocument(stored[PROFILE_STORAGE_KEY]);
+    return parsed.ok ? parsed.value : null;
+  } catch {
+    return null;
+  }
+}
+
+async function persistProfileDocument(document: ProfileDocument): Promise<void> {
+  const serialized = JSON.stringify(document);
+  internalProfileWrites.add(serialized);
+  try {
+    await chrome.storage.local.set({ [PROFILE_STORAGE_KEY]: document });
+  } catch (error) {
+    internalProfileWrites.delete(serialized);
+    throw error;
+  }
+}
+
+async function applyProfileToActiveCapture(profile: Profile, tabId: number): Promise<void> {
+  if (activeTabId !== tabId || (!status.active && !activationRequested)) return;
+  const generation = ++activationGeneration;
+  activationRequested = true;
+  activeProfile = profile;
+  queuedProfile = null;
+  updateStatus({ ...status, active: false, error: null });
+
+  if (status.backend === "browser-gamepad" || requestedMode === "browser") {
+    inFlightProfile = null;
+    await chrome.tabs.sendMessage(tabId, { type: "browser_deactivate" } satisfies RuntimeMessage);
+    if (generation !== activationGeneration || activeTabId !== tabId) return;
+    await activateBrowser(profile);
+    return;
+  }
+
+  if (port) post({ type: "deactivate", reason: "profile_switch" });
+  queuedProfile = profile;
+  if (handshakeComplete) sendPendingProfile();
+}
+
+function canManageTab(tabId: number): boolean {
+  return activeTabId === null || activeTabId === tabId;
+}
+
+function identityFromSender(sender: chrome.runtime.MessageSender): GameIdentity | null {
+  return sender.url ? parseXcloudGameIdentity(sender.url) : null;
+}
+
+function sameIdentity(left: GameIdentity | null, right: GameIdentity | null): boolean {
+  return left === null ? right === null : right !== null &&
+    left.product_id === right.product_id &&
+    left.title_slug === right.title_slug &&
+    left.title_name === right.title_name;
+}
+
+function serializeProfileMutation<T>(operation: () => Promise<T>): Promise<T> {
+  let next: Promise<T>;
+  if (profileMutationCount === 0) {
+    try {
+      next = operation();
+    } catch (error) {
+      next = Promise.reject(error);
+    }
+  } else {
+    next = profileMutationQueue.then(operation);
+  }
+  profileMutationCount += 1;
+  profileMutationQueue = next.then(() => undefined, () => undefined);
+  return next.finally(() => {
+    profileMutationCount -= 1;
+  });
+}
+
+async function prepareActivation(
+  tabId: number | null = activeTabId,
+  identity: GameIdentity | null = tabId === null ? null : detectedGames.get(tabId) ?? null,
+): Promise<void> {
   if (tabId === null) return;
   if (activeTabId !== null && activeTabId !== tabId) {
     const previousTabId = activeTabId;
@@ -122,14 +355,27 @@ async function prepareActivation(tabId: number | null = activeTabId): Promise<vo
   const generation = ++activationGeneration;
   activeTabId = tabId;
   activationRequested = true;
-  const selected = await loadSelectedProfile(chrome.storage.local);
+  const document = await loadProfileDocument();
   if (generation !== activationGeneration) return;
-  if (!selected.ok) {
-    failClosed(selected.error, "invalid_profile");
+  if (!document) {
+    failClosed("No valid saved profile is available.", "invalid_profile");
     return;
   }
-  queuedProfile = selected.profile;
-  activeProfile = selected.profile;
+  const match = identity ? matchGameProfile(document.profiles, identity) : null;
+  if (match?.kind === "unique") {
+    document.active_profile_id = match.profile_ids[0];
+    await persistProfileDocument(document);
+    if (generation !== activationGeneration) return;
+  } else if (match?.kind === "ambiguous") {
+    void sendToTab(tabId, await buildOverlayState(tabId, document));
+  }
+  const selected = document.profiles.find(({ id }) => id === document.active_profile_id);
+  if (!selected) {
+    failClosed("Selected profile is unavailable.", "invalid_profile");
+    return;
+  }
+  queuedProfile = selected;
+  activeProfile = selected;
   activeTabId = tabId;
   activationRequested = true;
   updateStatus({ ...status, active: false, error: null });
@@ -143,7 +389,7 @@ async function prepareActivation(tabId: number | null = activeTabId): Promise<vo
   if (generation !== activationGeneration) return;
   requestedMode = mode;
   if (requestedMode === "browser") {
-    await activateBrowser(selected.profile);
+    await activateBrowser(selected);
     return;
   }
   connect();
@@ -394,6 +640,7 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  detectedGames.delete(tabId);
   if (tabId === activeTabId) deactivate("tab_closed");
 });
 chrome.tabs.onUpdated.addListener((tabId, change) => {
@@ -410,7 +657,20 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     PROFILE_STORAGE_KEY in changes &&
     (status.active || activationRequested)
   ) {
-    void prepareActivation().catch((error: unknown) => {
+    const serialized = JSON.stringify(changes[PROFILE_STORAGE_KEY]?.newValue);
+    if (internalProfileWrites.delete(serialized)) return;
+    const parsed = parseProfileDocument(changes[PROFILE_STORAGE_KEY]?.newValue);
+    const profile = parsed.ok
+      ? parsed.value.profiles.find(({ id }) => id === parsed.value.active_profile_id)
+      : undefined;
+    if (!profile || activeTabId === null) {
+      failClosed(
+        parsed.ok ? "Selected profile is unavailable." : parsed.errors.join(" "),
+        "profile_update_failed",
+      );
+      return;
+    }
+    void applyProfileToActiveCapture(profile, activeTabId).catch((error: unknown) => {
       failClosed(error instanceof Error ? error.message : "Profile update failed", "profile_update_failed");
     });
   }
@@ -446,6 +706,15 @@ function updateStatus(next: BridgeStatus): void {
 function isXboxSender(sender: chrome.runtime.MessageSender): boolean {
   return sender.id === chrome.runtime.id && sender.frameId === 0 &&
     sender.tab?.id !== undefined && !!sender.url && isXboxPlayUrl(sender.url);
+}
+
+function isExtensionPageSender(sender: chrome.runtime.MessageSender): boolean {
+  return sender.id === chrome.runtime.id && sender.tab === undefined &&
+    !!sender.url && sender.url.startsWith(`chrome-extension://${chrome.runtime.id}/`);
+}
+
+function isTrustedExtensionSender(sender: chrome.runtime.MessageSender): boolean {
+  return isXboxSender(sender) || isExtensionPageSender(sender);
 }
 
 async function broadcastToXboxTabs(message: RuntimeMessage): Promise<void> {

@@ -4,16 +4,24 @@ import { createStarterProfiles, PROFILE_STORAGE_KEY } from "./profile-schema";
 describe("service worker activation ownership", () => {
   let listener: (message: unknown, sender: chrome.runtime.MessageSender, reply: (value: any) => void) => boolean;
   let storageGet: ReturnType<typeof vi.fn>;
+  let storageSet: ReturnType<typeof vi.fn>;
   let sendTab: ReturnType<typeof vi.fn>;
-  const sender = (id: number): chrome.runtime.MessageSender => ({
-    id: "extension-id", frameId: 0, url: "https://www.xbox.com/en-US/play",
+  let storedDocument = createStarterProfiles();
+  const sender = (id: number, url = "https://www.xbox.com/en-US/play"): chrome.runtime.MessageSender => ({
+    id: "extension-id", frameId: 0, url,
     tab: { id } as chrome.tabs.Tab,
   });
-  const message = (value: object, tab = 1): Promise<any> =>
-    new Promise(resolve => listener(value, sender(tab), resolve));
+  const message = (value: object, tab = 1, url?: string): Promise<any> =>
+    new Promise(resolve => listener(value, sender(tab, url), resolve));
   beforeEach(async () => {
     vi.resetModules();
-    storageGet = vi.fn(async () => ({ [PROFILE_STORAGE_KEY]: createStarterProfiles() }));
+    storedDocument = createStarterProfiles();
+    storageGet = vi.fn(async () => ({ [PROFILE_STORAGE_KEY]: storedDocument }));
+    storageSet = vi.fn(async (update: Record<string, unknown>) => {
+      if (PROFILE_STORAGE_KEY in update) {
+        storedDocument = structuredClone(update[PROFILE_STORAGE_KEY]) as typeof storedDocument;
+      }
+    });
     sendTab = vi.fn(async () => ({ accepted: true }));
     vi.stubGlobal("chrome", {
       runtime: {
@@ -23,7 +31,7 @@ describe("service worker activation ownership", () => {
         getManifest: () => ({ permissions: ["storage"] }),
         sendMessage: vi.fn(async () => {}),
       },
-      storage: { local: { get: storageGet }, onChanged: { addListener: vi.fn() } },
+      storage: { local: { get: storageGet, set: storageSet }, onChanged: { addListener: vi.fn() } },
       tabs: { sendMessage: sendTab, query: vi.fn(async () => []),
         onRemoved: { addListener: vi.fn() }, onUpdated: { addListener: vi.fn() } },
     });
@@ -92,5 +100,164 @@ describe("service worker activation ownership", () => {
     updated(1, { status: "loading" }, sender(1).tab!);
     expect((await message({ type: "get_status" })).active).toBe(false);
     expect(sendTab).toHaveBeenCalledWith(1, { type: "stop_capture", reason: "tab_navigated" });
+  });
+
+  it("selects a unique exact product profile on a SPA identity update", async () => {
+    storedDocument.profiles[1]!.game_associations = [{
+      title_id: "abc123", title_name: "test game", aliases: [],
+    }];
+    const result = await message({
+      type: "game_identity_changed",
+      identity: { product_id: "abc123", title_slug: "test-game", title_name: "test game" },
+    }, 1, "https://www.xbox.com/en-US/play/games/test-game/ABC123");
+    expect(storedDocument.active_profile_id).toBe("fps");
+    expect(result.active_profile_id).toBe("fps");
+    expect(result.match).toBe("matched");
+  });
+
+  it("offers an ambiguous alias choice without changing the active profile", async () => {
+    storedDocument.profiles[0]!.game_associations = [{
+      title_id: "first", title_name: "test game", aliases: [],
+    }];
+    storedDocument.profiles[1]!.game_associations = [{
+      title_id: "second", title_name: "second", aliases: ["test game"],
+    }];
+    const identity = { product_id: "abc123", title_slug: "test-game", title_name: "test game" };
+    const result = await message(
+      { type: "game_identity_changed", identity },
+      1,
+      "https://www.xbox.com/en-US/play/games/test-game/ABC123",
+    );
+    expect(storedDocument.active_profile_id).toBe("default");
+    expect(result.match).toBe("ambiguous");
+    expect(result.candidate_profile_ids).toEqual(["default", "fps"]);
+    expect(sendTab).toHaveBeenCalledWith(1, expect.objectContaining({ type: "overlay_state" }));
+  });
+
+  it("neutralizes browser mapping before atomically applying an automatic switch", async () => {
+    await message({ type: "capture_started" });
+    sendTab.mockClear();
+    storedDocument.profiles[1]!.game_associations = [{
+      title_id: "abc123", title_name: "test game", aliases: [],
+    }];
+    await message({
+      type: "game_identity_changed",
+      identity: { product_id: "abc123", title_slug: "test-game", title_name: "test game" },
+    }, 1, "https://www.xbox.com/en-US/play/games/test-game/ABC123");
+    expect(sendTab.mock.calls[0]).toEqual([1, { type: "browser_deactivate" }]);
+    expect(sendTab.mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+      type: "browser_activate",
+      profile: expect.objectContaining({ id: "fps" }),
+    }));
+  });
+
+  it("persists an explicit ambiguous choice as an exact local association", async () => {
+    const identity = { product_id: "abc123", title_slug: "test-game", title_name: "test game" };
+    await message(
+      { type: "game_identity_changed", identity },
+      1,
+      "https://www.xbox.com/en-US/play/games/test-game/ABC123",
+    );
+    const result = await message(
+      { type: "select_profile", profile_id: "racing", associate: true },
+      1,
+      "https://www.xbox.com/en-US/play/games/test-game/ABC123",
+    );
+    expect(storedDocument.active_profile_id).toBe("racing");
+    expect(storedDocument.profiles[2]!.game_associations).toContainEqual({
+      title_id: "abc123", title_name: "test game", aliases: [],
+    });
+    expect(result.match).toBe("matched");
+  });
+
+  it("persists bounded hip and ADS tuning from the owning tab", async () => {
+    const result = await message({
+      type: "update_profile_sensitivity",
+      profile_id: "fps",
+      hip_x: 0.031,
+      hip_y: 0.032,
+      ads_x: 0.011,
+      ads_y: 0.012,
+    });
+    expect(storedDocument.active_profile_id).toBe("fps");
+    expect(storedDocument.profiles[1]!.mouse.hip).toEqual(expect.objectContaining({
+      sensitivity_x: 0.031,
+      sensitivity_y: 0.032,
+    }));
+    expect(storedDocument.profiles[1]!.mouse.ads).toEqual(expect.objectContaining({
+      sensitivity_x: 0.011,
+      sensitivity_y: 0.012,
+    }));
+    expect(result.active_profile_id).toBe("fps");
+  });
+
+  it("rejects profile management from an unrelated tab while capture is owned", async () => {
+    await message({ type: "capture_started" });
+    const before = JSON.stringify(storedDocument);
+    await message({ type: "select_profile", profile_id: "fps", associate: false }, 2);
+    expect(JSON.stringify(storedDocument)).toBe(before);
+  });
+
+  it("does not let a background game route replace the owning tab's profile", async () => {
+    await message({ type: "capture_started" });
+    storedDocument.profiles[1]!.game_associations = [{
+      title_id: "abc123", title_name: "test game", aliases: [],
+    }];
+    await message({
+      type: "game_identity_changed",
+      identity: { product_id: "abc123", title_slug: "test-game", title_name: "test game" },
+    }, 2, "https://www.xbox.com/en-US/play/games/test-game/ABC123");
+    expect(storedDocument.active_profile_id).toBe("default");
+  });
+
+  it("reconstructs game identity from the browser-owned sender URL after restart", async () => {
+    const result = await message(
+      { type: "get_overlay_state" },
+      1,
+      "https://www.xbox.com/en-US/play/games/test-game/ABC123",
+    );
+    expect(result.identity).toEqual({
+      product_id: "abc123", title_slug: "test-game", title_name: "test game",
+    });
+  });
+
+  it("resolves the initiating tab's exact game association before capture starts", async () => {
+    storedDocument.profiles[1]!.game_associations = [{
+      title_id: "abc123", title_name: "test game", aliases: [],
+    }];
+    await message(
+      { type: "capture_started" },
+      1,
+      "https://www.xbox.com/en-US/play/games/test-game/ABC123",
+    );
+    expect(sendTab).toHaveBeenCalledWith(1, expect.objectContaining({
+      type: "browser_activate",
+      profile: expect.objectContaining({ id: "fps" }),
+    }));
+  });
+
+  it("serializes concurrent profile selection and sensitivity persistence", async () => {
+    let finish!: () => void;
+    storageSet.mockImplementationOnce((update: Record<string, unknown>) =>
+      new Promise<void>(resolve => {
+        finish = () => {
+          storedDocument = structuredClone(update[PROFILE_STORAGE_KEY]) as typeof storedDocument;
+          resolve();
+        };
+      }));
+    const selecting = message({ type: "select_profile", profile_id: "fps", associate: false });
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    const tuning = message({
+      type: "update_profile_sensitivity",
+      profile_id: "fps",
+      hip_x: 0.041,
+      hip_y: 0.042,
+      ads_x: 0.021,
+      ads_y: 0.022,
+    });
+    finish();
+    await Promise.all([selecting, tuning]);
+    expect(storedDocument.active_profile_id).toBe("fps");
+    expect(storedDocument.profiles[1]!.mouse.hip.sensitivity_x).toBe(0.041);
   });
 });

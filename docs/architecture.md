@@ -200,8 +200,20 @@ Profile schema v2 carries bounded hip and ADS response settings plus optional
 normalized game-association metadata. The browser and Rust mappers use the same
 ADS source, velocity-scaling, curve, and smoothing semantics. The v1 migration
 copies the former response into both modes with all advanced effects disabled.
-Game metadata is not consulted at runtime in this layer, so no page-content
-inspection or automatic profile switching occurs.
+The isolated content script derives game identity only from stable-style
+`/play/games/<title-slug>/<productId>` routes and observes URL changes during
+SPA navigation. The service worker compares normalized product IDs first, then
+explicit normalized names and aliases. It selects only a unique match; ambiguous
+aliases surface a local overlay choice. An explicit choice stores an exact
+product association locally. The implementation does not inspect arbitrary DOM,
+intercept Xbox traffic, access authentication state, or send network requests.
+
+The in-game quick overlay uses a configurable shortcut distinct from
+**Ctrl+Alt+G** and `Esc`. Opening it neutralizes active capture before editing.
+Live profile replacement is a neutralize-then-apply transaction in both browser
+and companion modes. Runtime messages use exact-key validation, and the service
+worker accepts game/profile commands only from the top frame of the owning
+eligible Xbox tab.
 
 ## Failure handling and invariants
 

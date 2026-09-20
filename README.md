@@ -30,13 +30,22 @@ video fullscreen and browser fullscreen (F11), where the prompt may not appear.
 The shortcut starts only from your keypress; entering fullscreen alone never
 captures input. Press **Ctrl+Alt+G** again to stop without using Esc.
 
+Press **Ctrl+Alt+P** to open the configurable in-game quick overlay. Opening it
+stops and neutralizes active capture before allowing profile changes. The
+overlay shows the route-detected game, current profile, capture state, and
+bounded hip/ADS sensitivity controls. For native video fullscreen, the shortcut
+exits fullscreen before displaying the overlay because HTML cannot render above
+that surface.
+
 Click **View / edit mappings** in the extension popup to see keyboard and mouse
-bindings, choose controller targets, and tune separate hip and aim-down-sights
-(ADS) mouse response. Profiles can also store optional normalized game names,
-aliases, and title IDs for future selection support. This release does not
-inspect page content or switch profiles automatically. Select a profile, edit
-it, and click **Save changes** to apply it. The same editor is also available
-from the extension's **Options** page.
+bindings, browse/search bundled generic FPS, third-person/action, racing,
+platformer, and one-handed accessibility presets, and tune separate hip and
+aim-down-sights (ADS) mouse response. Profiles can store normalized product IDs,
+game names, and aliases. The extension observes only documented-style
+`/play/games/<title-slug>/<productId>` URLs and SPA navigation; it does not read
+the page DOM, authentication data, or Xbox traffic. A unique exact product ID or
+explicit alias selects a profile. Ambiguous names display a non-blocking choice,
+and an explicit choice stores the product association locally.
 The extension stores settings locally and requests no Native Messaging
 permission. See `docs\browser-only-mode.md` for limitations.
 

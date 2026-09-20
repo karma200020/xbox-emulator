@@ -9,8 +9,11 @@ only while the user has explicitly activated capture.
 - The browser-only extension processes captured input locally in the matched
   Xbox Cloud Gaming page. It requests no Native Messaging permission and has no
   network client, telemetry SDK, advertising, or cloud synchronization.
-- Profiles are intended to remain local. Export, when implemented, will require
-  an explicit user action.
+- Profiles remain local. Export requires an explicit user action.
+- Automatic profile selection reads only the current xCloud route's title slug
+  and product ID. It does not read arbitrary page content, account/session data,
+  or Xbox network traffic. Explicit game/profile associations remain in local
+  extension storage.
 - Diagnostic messages contain coarse connection and error state, never raw
   input payloads.
 

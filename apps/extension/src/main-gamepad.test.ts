@@ -105,4 +105,18 @@ describe("MAIN-world gamepad lifecycle", () => {
     expect(nav.getGamepads()[0]).toBeNull();
     vi.restoreAllMocks();
   });
+
+  it("neutralizes held physical state before activating a replacement profile", () => {
+    activate();
+    const previousPad = nav.getGamepads()[0]!;
+    command({ command: "events", message: {
+      type: "browser_events",
+      events: [{ kind: "key", code: "Space", down: true }],
+      timestamp_ms: 1,
+    } });
+    expect(previousPad.buttons[0]!.pressed).toBe(true);
+    command({ command: "activate", profile: createStarterProfiles().profiles[1] });
+    expect(previousPad.buttons.every(button => button.value === 0)).toBe(true);
+    expect(nav.getGamepads()[0]?.buttons.every(button => button.value === 0)).toBe(true);
+  });
 });
