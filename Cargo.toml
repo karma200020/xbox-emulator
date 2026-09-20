@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/companion",
+    "crates/controller-backend",
+    "crates/local-input-core",
+    "crates/mapping-core",
+    "crates/protocol",
+    "crates/windows-raw-input",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.0"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"

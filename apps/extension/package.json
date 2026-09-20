@@ -1,0 +1,17 @@
+{
+  "name": "@xib/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.32",
+    "esbuild": "^0.25.10",
+    "typescript": "^5.9.2",
+    "vitest": "^5.0.1"
+  }
+}

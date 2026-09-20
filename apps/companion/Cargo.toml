@@ -1,0 +1,18 @@
+[package]
+name = "xib-companion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+xib-controller-backend = { path = "../../crates/controller-backend" }
+xib-local-input-core = { path = "../../crates/local-input-core" }
+xib-mapping-core = { path = "../../crates/mapping-core" }
+xib-protocol = { path = "../../crates/protocol" }
+
+[target.'cfg(windows)'.dependencies]
+xib-windows-raw-input = { path = "../../crates/windows-raw-input" }
+
+[lints]
+workspace = true

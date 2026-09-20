@@ -1,0 +1,83 @@
+:root {
+  color-scheme: dark;
+  font: 14px/1.45 system-ui, sans-serif;
+}
+
+body {
+  width: 300px;
+  margin: 0;
+  color: #f5f5f5;
+  background: #181818;
+}
+
+main {
+  padding: 16px;
+}
+
+h1 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+#status {
+  min-height: 42px;
+  margin: 0 0 12px;
+}
+
+label[for="backend"] {
+  display: block;
+  margin-bottom: 4px;
+  color: #ccc;
+}
+
+#backend {
+  width: 100%;
+  margin-bottom: 14px;
+  padding: 7px;
+  color: inherit;
+  background: #282828;
+  border: 1px solid #666;
+  border-radius: 4px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  flex: 1;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 4px;
+  color: white;
+  background: #107c10;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+button.secondary {
+  background: #444;
+}
+
+.mapping-editor {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.hint {
+  margin: 14px 0 0;
+  color: #bbb;
+  font-size: 12px;
+}
+
+kbd {
+  padding: 1px 4px;
+  border: 1px solid #777;
+  border-radius: 3px;
+}

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Xbox Input Bridge</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <h1>Xbox Input Bridge</h1>
+      <p id="status" role="status">Checking companion...</p>
+      <label for="backend">Controller mode</label>
+      <select id="backend">
+        <option value="browser">Browser only (driverless)</option>
+      </select>
+      <div class="actions">
+        <button id="start" type="button">Start capture</button>
+        <button id="stop" type="button" class="secondary">Stop</button>
+      </div>
+      <button id="edit-mappings" type="button" class="secondary mapping-editor">View / edit mappings</button>
+      <p class="hint">Choose a profile, change keyboard or mouse bindings, then click Save changes.</p>
+      <p class="hint">In fullscreen, click the in-game activation prompt or press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>G</kbd> to start/stop capture. Press <kbd>Esc</kbd> to release the mouse. Starting requires pointer lock.</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

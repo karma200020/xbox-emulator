@@ -1,0 +1,31 @@
+[package]
+name = "xib-windows-raw-input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+xib-local-input-core = { path = "../local-input-core" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Power",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Input",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "Xbox Input Bridge",
+  "description": "Maps keyboard and mouse input to a driverless virtual controller on Xbox Cloud Gaming.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.xbox.com/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "Xbox Input Bridge",
+    "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.xbox.com/*/play*",
+        "https://www.xbox.com/play*"
+      ],
+      "js": [
+        "main-gamepad.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://www.xbox.com/*/play*",
+        "https://www.xbox.com/play*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  }
+}

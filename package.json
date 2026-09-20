@@ -1,0 +1,17 @@
+{
+  "name": "xbox-input-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/extension"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @xib/extension",
+    "check": "npm run check --workspace @xib/extension",
+    "test": "npm run test --workspace @xib/extension"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
+

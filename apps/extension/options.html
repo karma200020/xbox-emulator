@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Profiles · Xbox Input Bridge</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">Xbox Input Bridge</p>
+        <h1>Controller profiles</h1>
+        <p>View or edit the keyboard and mouse bindings below, then click Save changes. Profiles stay in this browser.</p>
+      </div>
+      <div class="toolbar" aria-label="Profile actions">
+        <button id="import" type="button" class="secondary">Import JSON</button>
+        <button id="export" type="button" class="secondary">Export JSON</button>
+        <button id="reset" type="button" class="danger">Reset starters</button>
+        <button id="save" type="button">Save changes</button>
+      </div>
+      <input id="import-file" type="file" accept="application/json,.json" hidden>
+    </header>
+
+    <main>
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+      <section class="profile-bar" aria-labelledby="profile-heading">
+        <div>
+          <label id="profile-heading" for="profile">Profile</label>
+          <select id="profile"></select>
+        </div>
+        <div class="profile-actions">
+          <button id="duplicate-profile" type="button" class="secondary">Duplicate</button>
+          <button id="delete-profile" type="button" class="danger">Delete</button>
+        </div>
+      </section>
+
+      <form id="editor" novalidate>
+        <section class="card" aria-labelledby="identity-heading">
+          <h2 id="identity-heading">Identity</h2>
+          <div class="grid two">
+            <label>Name <input id="profile-name" maxlength="60" required></label>
+            <label>Profile ID <input id="profile-id" maxlength="40" pattern="[a-z0-9][a-z0-9_-]*" required></label>
+          </div>
+        </section>
+
+        <section class="card" aria-labelledby="aim-heading">
+          <h2 id="aim-heading">Mouse response</h2>
+          <p class="help">Tune right-stick response. Values are bounded before they can be saved.</p>
+          <div class="grid controls">
+            <label>Sensitivity X
+              <input id="sensitivity-x" type="number" min="0.001" max="0.2" step="0.001" required>
+            </label>
+            <label>Sensitivity Y
+              <input id="sensitivity-y" type="number" min="0.001" max="0.2" step="0.001" required>
+            </label>
+            <label>Deadzone
+              <input id="deadzone" type="number" min="0" max="0.95" step="0.01" required>
+            </label>
+            <label>Response curve
+              <select id="curve">
+                <option value="linear">Linear</option>
+                <option value="precision">Precision</option>
+                <option value="exponential">Exponential</option>
+              </select>
+            </label>
+          </div>
+          <div class="checks">
+            <label><input id="invert-x" type="checkbox"> Invert horizontal axis</label>
+            <label><input id="invert-y" type="checkbox"> Invert vertical axis</label>
+          </div>
+          <div class="response-tools">
+            <figure class="curve-preview">
+              <figcaption>Response curve preview</figcaption>
+              <svg id="curve-preview" viewBox="0 0 320 180" role="img" aria-label="Response curve preview">
+                <path class="preview-grid" d="M24 8V156H312M24 156L312 8"></path>
+                <polyline id="curve-line" points=""></polyline>
+              </svg>
+            </figure>
+            <section class="calibration" aria-labelledby="calibration-heading">
+              <h3 id="calibration-heading">Local pointer calibration</h3>
+              <p class="help">Start, then move the pointer naturally. Up to 240 samples stay in memory only and are discarded when stopped.</p>
+              <div class="calibration-actions">
+                <button id="start-calibration" type="button">Start calibration</button>
+                <button id="stop-calibration" type="button" class="secondary" disabled>Stop</button>
+              </div>
+              <div id="calibration-surface" class="calibration-surface" tabindex="0" aria-label="Calibration capture surface">
+                <span id="calibration-state">Stopped</span>
+                <div class="stick-plot" role="img" aria-label="Normalized right stick">
+                  <span class="crosshair horizontal"></span><span class="crosshair vertical"></span>
+                  <span id="stick-dot" class="stick-dot"></span>
+                </div>
+              </div>
+              <output id="calibration-values" class="calibration-values" aria-live="polite">Raw Δ 0, 0 · Stick 0.000, 0.000 · 0 samples</output>
+              <div id="suggestion" class="suggestion" hidden>
+                Suggested sensitivity: <strong id="suggested-value"></strong>
+                <button id="apply-suggestion" type="button" class="secondary">Apply to X and Y</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <div class="binding-grid">
+          <section class="card" aria-labelledby="keyboard-heading">
+            <div class="section-title">
+              <div><h2 id="keyboard-heading">Keyboard bindings</h2><p class="help">Edit the key code (KeyW = W, Space = spacebar, ShiftLeft = left Shift), then choose its Xbox target. Esc is reserved for stopping capture.</p></div>
+              <button id="add-key" type="button" class="secondary">Add</button>
+            </div>
+            <div id="key-bindings" class="bindings"></div>
+          </section>
+          <section class="card" aria-labelledby="mouse-heading">
+            <div class="section-title">
+              <div><h2 id="mouse-heading">Mouse bindings</h2><p class="help">0 = left click, 1 = middle click, 2 = right click, 3 = back, 4 = forward. Mouse movement controls the right stick.</p></div>
+              <button id="add-mouse" type="button" class="secondary">Add</button>
+            </div>
+            <div id="mouse-bindings" class="bindings"></div>
+          </section>
+        </div>
+
+        <section id="conflicts-card" class="card warning" aria-labelledby="conflicts-heading" hidden>
+          <h2 id="conflicts-heading">Duplicate binding warnings</h2>
+          <ul id="conflicts"></ul>
+        </section>
+      </form>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

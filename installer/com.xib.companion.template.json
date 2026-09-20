@@ -1,0 +1,10 @@
+{
+  "name": "com.xib.companion",
+  "description": "Xbox Input Bridge native companion",
+  "path": "__COMPANION_PATH__",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://__EXTENSION_ID__/"
+  ]
+}
+
