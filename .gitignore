@@ -5,3 +5,4 @@ dist/
 *.pdb
 .DS_Store
 browser-integration-*.json
+/release/

@@ -25,3 +25,4 @@ for (const file of ["manifest.json", "popup.html", "popup.css", "options.html", 
   await cp(new URL(file, import.meta.url), new URL(file, outdir));
 }
 await cp(new URL("_locales", import.meta.url), new URL("_locales", outdir), { recursive: true });
+await cp(new URL("icons", import.meta.url), new URL("icons", outdir), { recursive: true });

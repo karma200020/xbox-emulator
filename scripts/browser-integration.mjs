@@ -8,6 +8,7 @@ const root = resolve(import.meta.dirname, "..");
 const extensionDir = join(root, "apps", "extension", "dist");
 const requested = argument("--browser") ?? "all";
 const executableOverride = argument("--executable");
+const optionsScreenshot = argument("--options-screenshot");
 const holdMs = Number(argument("--hold-ms") ?? "32000");
 const artifactsDir = resolve(argument("--artifacts") ?? join(tmpdir(), "xib-browser-integration"));
 const headed = process.argv.includes("--headed");
@@ -65,6 +66,37 @@ async function runBrowser(browser, executable) {
     }, 20_000, "extension service worker");
     const extensionId = new URL(extensionTarget.url).host;
     checks.push(pass("extension_load", extensionId));
+    if (optionsScreenshot) {
+      const optionsTarget = await browserCdp.send("Target.createTarget", {
+        url: `chrome-extension://${extensionId}/options.html`,
+      });
+      const optionsPage = await waitFor(async () => {
+        const targets = await json(`http://127.0.0.1:${port}/json/list`);
+        return targets.find((target) => target.id === optionsTarget.targetId);
+      }, 10_000, "options page target");
+      const optionsCdp = new Cdp(optionsPage.webSocketDebuggerUrl);
+      await optionsCdp.ready();
+      await optionsCdp.send("Page.enable");
+      await optionsCdp.send("Emulation.setDeviceMetricsOverride", {
+        width: 1280, height: 800, deviceScaleFactor: 1, mobile: false,
+      });
+      await waitFor(async () => {
+        const result = await optionsCdp.send("Runtime.evaluate", {
+          expression: "document.readyState === 'complete'",
+          returnByValue: true,
+        });
+        return result.result.value === true;
+      }, 10_000, "options page load");
+      await sleep(500);
+      const screenshot = await optionsCdp.send("Page.captureScreenshot", {
+        format: "png", captureBeyondViewport: false,
+      });
+      const output = resolve(optionsScreenshot);
+      await mkdir(resolve(output, ".."), { recursive: true });
+      await writeFile(output, Buffer.from(screenshot.data, "base64"));
+      await optionsCdp.close();
+      await browserCdp.send("Target.closeTarget", { targetId: optionsTarget.targetId });
+    }
 
     const initialPage = await findPage(port, () => true);
     await browserCdp.send("Target.closeTarget", { targetId: initialPage.id });
