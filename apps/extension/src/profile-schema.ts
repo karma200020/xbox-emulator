@@ -544,11 +544,21 @@ function target(button: keyof typeof BUTTONS): Target[] {
   return [{ button: BUTTONS[button] }];
 }
 
+function menuBindings(): Record<string, Target[]> {
+  return {
+    ArrowUp: target("dpad_up"),
+    ArrowDown: target("dpad_down"),
+    ArrowLeft: target("dpad_left"),
+    ArrowRight: target("dpad_right"),
+  };
+}
+
 function defaultProfile(): Profile {
   return {
     id: "default",
     name: "Default",
     key_bindings: {
+      ...menuBindings(),
       KeyW: ["left_y_positive"],
       KeyS: ["left_y_negative"],
       KeyA: ["left_x_negative"],
@@ -592,6 +602,7 @@ function racingProfile(): Profile {
     id: "racing",
     name: "Racing",
     key_bindings: {
+      ...menuBindings(),
       KeyW: ["right_trigger"],
       KeyS: ["left_trigger"],
       KeyA: ["left_x_negative"],
@@ -631,6 +642,7 @@ function platformerProfile(): Profile {
     id: "platformer",
     name: "Platformer",
     key_bindings: {
+      ...menuBindings(),
       KeyW: ["left_y_positive"],
       KeyS: ["left_y_negative"],
       KeyA: ["left_x_negative"],
@@ -656,6 +668,7 @@ function oneHandedProfile(): Profile {
     id: "one-handed",
     name: "Accessibility: One-handed",
     key_bindings: {
+      ...menuBindings(),
       KeyW: ["left_y_positive"],
       KeyS: ["left_y_negative"],
       KeyA: ["left_x_negative"],

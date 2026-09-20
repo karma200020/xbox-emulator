@@ -26,6 +26,25 @@ describe("BrowserGamepadMapper", () => {
     expect(state.axes).toHaveLength(4);
   });
 
+  it("uses unbound arrow keys for D-pad menu navigation", () => {
+    const mapper = new BrowserGamepadMapper(profile());
+    const state = mapper.apply([
+      { kind: "key", code: "ArrowLeft", down: true },
+      { kind: "key", code: "ArrowUp", down: true },
+    ]);
+    expect(state.buttons[12]).toBe(1);
+    expect(state.buttons[14]).toBe(1);
+  });
+
+  it("honors custom arrow bindings instead of menu fallbacks", () => {
+    const value = profile();
+    value.key_bindings.ArrowLeft = [{ button: BUTTONS.b }];
+    const state = new BrowserGamepadMapper(value)
+      .apply([{ kind: "key", code: "ArrowLeft", down: true }]);
+    expect(state.buttons[1]).toBe(1);
+    expect(state.buttons[14]).toBe(0);
+  });
+
   it("supports multi-bindings and does not release a target held elsewhere", () => {
     const value = profile();
     value.key_bindings.Enter = [{ button: BUTTONS.a }, { button: BUTTONS.b }];

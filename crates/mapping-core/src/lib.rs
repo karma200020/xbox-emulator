@@ -126,6 +126,10 @@ impl Default for Profile {
             ("KeyS", Target::LeftYNegative),
             ("KeyA", Target::LeftXNegative),
             ("KeyD", Target::LeftXPositive),
+            ("ArrowUp", Target::Button(button::DPAD_UP)),
+            ("ArrowDown", Target::Button(button::DPAD_DOWN)),
+            ("ArrowLeft", Target::Button(button::DPAD_LEFT)),
+            ("ArrowRight", Target::Button(button::DPAD_RIGHT)),
             ("Space", Target::Button(button::A)),
             ("ShiftLeft", Target::Button(button::LEFT_THUMB)),
             ("KeyE", Target::Button(button::B)),
@@ -323,6 +327,16 @@ fn validate_bindings(
     Ok(())
 }
 
+fn menu_key_fallback(source: &str) -> &'static [Target] {
+    match source {
+        "ArrowUp" => &[Target::Button(button::DPAD_UP)],
+        "ArrowDown" => &[Target::Button(button::DPAD_DOWN)],
+        "ArrowLeft" => &[Target::Button(button::DPAD_LEFT)],
+        "ArrowRight" => &[Target::Button(button::DPAD_RIGHT)],
+        _ => &[],
+    }
+}
+
 fn validate_key_code(source: &str) -> Result<(), ProfileValidationError> {
     let mut characters = source.chars();
     if source.len() > 64
@@ -478,8 +492,8 @@ impl Mapper {
             self.profile
                 .key_bindings
                 .get(source)
-                .into_iter()
-                .flatten()
+                .map_or_else(|| menu_key_fallback(source), Vec::as_slice)
+                .iter()
                 .copied()
         });
         let mouse = self.pressed_mouse_buttons.iter().flat_map(|source| {
@@ -660,6 +674,33 @@ mod tests {
             },
         ]);
         assert_eq!(state.left_x, 0);
+    }
+
+    #[test]
+    fn unbound_arrow_keys_fall_back_to_dpad_navigation() {
+        let mut profile = Profile::default();
+        profile.key_bindings.remove("ArrowLeft");
+        let mut mapper = Mapper::new(profile);
+        let state = mapper.apply_batch(&[InputEvent::Key {
+            code: "ArrowLeft".into(),
+            down: true,
+        }]);
+        assert_ne!(state.buttons & button::DPAD_LEFT, 0);
+    }
+
+    #[test]
+    fn custom_arrow_binding_overrides_dpad_fallback() {
+        let mut profile = Profile::default();
+        profile
+            .key_bindings
+            .insert("ArrowLeft".into(), vec![Target::Button(button::B)]);
+        let mut mapper = Mapper::new(profile);
+        let state = mapper.apply_batch(&[InputEvent::Key {
+            code: "ArrowLeft".into(),
+            down: true,
+        }]);
+        assert_ne!(state.buttons & button::B, 0);
+        assert_eq!(state.buttons & button::DPAD_LEFT, 0);
     }
 
     #[test]

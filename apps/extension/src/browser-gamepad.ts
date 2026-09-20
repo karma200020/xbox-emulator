@@ -23,6 +23,13 @@ const BUTTON_INDEX = new Map<number, number>([
   [BUTTONS.dpad_left, 14], [BUTTONS.dpad_right, 15], [BUTTONS.guide, 16],
 ]);
 
+const MENU_KEY_FALLBACKS: Readonly<Record<string, readonly Target[]>> = {
+  ArrowUp: [{ button: BUTTONS.dpad_up }],
+  ArrowDown: [{ button: BUTTONS.dpad_down }],
+  ArrowLeft: [{ button: BUTTONS.dpad_left }],
+  ArrowRight: [{ button: BUTTONS.dpad_right }],
+};
+
 export class BrowserGamepadMapper {
   readonly #profile: Profile;
   readonly #keys = new Set<string>();
@@ -71,6 +78,8 @@ export class BrowserGamepadMapper {
     for (const code of this.#keys) {
       if (Object.hasOwn(this.#profile.key_bindings, code)) {
         targets.push(...this.#profile.key_bindings[code]!);
+      } else if (Object.hasOwn(MENU_KEY_FALLBACKS, code)) {
+        targets.push(...MENU_KEY_FALLBACKS[code]!);
       }
     }
     for (const button of this.#mouseButtons) {

@@ -35,6 +35,10 @@ video fullscreen and browser fullscreen (F11), where the prompt may not appear.
 The shortcut starts only from your keypress; entering fullscreen alone never
 captures input. Press **Ctrl+Alt+G** again to stop without using Esc.
 
+The default PC controls use **W/A/S/D** for the left stick, the **arrow keys**
+for D-pad menu navigation, and **Space** for the Xbox A/confirm button. An
+explicit custom arrow-key binding takes precedence over the menu fallback.
+
 Press **Ctrl+Alt+P** to open the configurable in-game quick overlay. Opening it
 stops and neutralizes active capture before allowing profile changes. The
 overlay shows the route-detected game, current profile, capture state, and
