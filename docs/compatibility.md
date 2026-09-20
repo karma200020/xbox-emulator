@@ -37,9 +37,12 @@ the profile afterward. It does not use credentials or launch a game.
 | Environment | Result | Exact automated coverage |
 | --- | --- | --- |
 | Microsoft Edge 146.0.3856.109, Windows x64 | Pass | Unpacked MV3 load, exact-route injection, idle content/MAIN handshake, active watchdog response, pointer-lock activation, held W mapping, 32-second held input with the service-worker debugger detached and worker recovery afterward, atomic profile switch, Escape neutralization, container and video fullscreen shortcuts with fullscreen preserved on stop, SPA navigation cleanup |
+| Chrome for Testing 153.0.8010.52, Windows x64 | Pass | Same complete automated path as Edge, using `--browser chrome --executable <path-to-chrome-for-testing.exe>` |
 | Google Chrome Stable 153.0.8010.48, Windows x64 | Blocked | Browser version was detected, but this branded Stable build rejected command-line unpacked-extension loading; no extension behavior is claimed for this run |
 
-The Edge result is browser plumbing coverage, not a game compatibility result.
+The Edge and Chrome for Testing results are browser plumbing coverage, not game
+compatibility results. The `--executable` override requires selecting one browser
+and exists so the same suite can run against approved Chromium test binaries.
 Unit coverage also exercises physical-controller index collisions, delayed
 activation/bridge acknowledgements, aggregate bounds, privacy-safe export,
 failure counters, self-test results, localization completeness, and closed

@@ -6,6 +6,7 @@ describe("service worker activation ownership", () => {
   let storageGet: ReturnType<typeof vi.fn>;
   let storageSet: ReturnType<typeof vi.fn>;
   let sendTab: ReturnType<typeof vi.fn>;
+  let storageChanged: (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => void;
   let storedDocument = createStarterProfiles();
   const sender = (id: number, url = "https://www.xbox.com/en-US/play"): chrome.runtime.MessageSender => ({
     id: "extension-id", frameId: 0, url,
@@ -33,7 +34,7 @@ describe("service worker activation ownership", () => {
       },
       storage: {
         local: { get: storageGet, set: storageSet, remove: vi.fn(async () => {}) },
-        onChanged: { addListener: vi.fn() },
+        onChanged: { addListener: (fn: typeof storageChanged) => { storageChanged = fn; } },
       },
       tabs: { sendMessage: sendTab, query: vi.fn(async () => []),
         onRemoved: { addListener: vi.fn() }, onUpdated: { addListener: vi.fn() } },
@@ -123,6 +124,25 @@ describe("service worker activation ownership", () => {
     expect(storedDocument.active_profile_id).toBe("fps");
     expect(result.active_profile_id).toBe("fps");
     expect(result.match).toBe("matched");
+  });
+
+  it("reconciles internal profile writes while capture is inactive", async () => {
+    storedDocument.profiles[1]!.game_associations = [{
+      title_id: "abc123", title_name: "test game", aliases: [],
+    }];
+    await message({
+      type: "game_identity_changed",
+      identity: { product_id: "abc123", title_slug: "test-game", title_name: "test game" },
+    }, 1, "https://www.xbox.com/en-US/play/games/test-game/ABC123");
+    const written = structuredClone(storedDocument);
+    storageChanged({ [PROFILE_STORAGE_KEY]: { newValue: written } }, "local");
+
+    await message({ type: "capture_started" });
+    sendTab.mockClear();
+    storageChanged({ [PROFILE_STORAGE_KEY]: { newValue: written } }, "local");
+    await vi.waitFor(() => expect(sendTab).toHaveBeenCalledWith(
+      1, expect.objectContaining({ type: "browser_activate" }),
+    ));
   });
 
   it("offers an ambiguous alias choice without changing the active profile", async () => {

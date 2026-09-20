@@ -729,13 +729,15 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local" && PROFILE_STORAGE_KEY in changes) {
+    const serialized = JSON.stringify(changes[PROFILE_STORAGE_KEY]?.newValue);
+    if (internalProfileWrites.delete(serialized)) return;
+  }
   if (
     areaName === "local" &&
     PROFILE_STORAGE_KEY in changes &&
     (status.active || activationRequested)
   ) {
-    const serialized = JSON.stringify(changes[PROFILE_STORAGE_KEY]?.newValue);
-    if (internalProfileWrites.delete(serialized)) return;
     const parsed = parseProfileDocument(changes[PROFILE_STORAGE_KEY]?.newValue);
     const profile = parsed.ok
       ? parsed.value.profiles.find(({ id }) => id === parsed.value.active_profile_id)

@@ -7,6 +7,7 @@ import { basename, join, resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const extensionDir = join(root, "apps", "extension", "dist");
 const requested = argument("--browser") ?? "all";
+const executableOverride = argument("--executable");
 const holdMs = Number(argument("--hold-ms") ?? "32000");
 const artifactsDir = resolve(argument("--artifacts") ?? join(tmpdir(), "xib-browser-integration"));
 const headed = process.argv.includes("--headed");
@@ -393,9 +394,12 @@ function argument(name) {
 
 await mkdir(artifactsDir, { recursive: true });
 const browsers = requested === "all" ? ["chrome", "edge"] : [requested];
+if (executableOverride && requested === "all") {
+  throw new Error("--executable requires selecting one browser with --browser");
+}
 const runs = [];
 for (const browser of browsers) {
-  const executable = candidates[browser]?.find(existsSync);
+  const executable = executableOverride ?? candidates[browser]?.find(existsSync);
   if (!executable) {
     runs.push({ browser, status: "not_available", checks: [] });
     continue;
