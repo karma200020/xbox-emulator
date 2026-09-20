@@ -893,7 +893,7 @@ function deleteProfile(): void {
 async function save(): Promise<void> {
   const result = parseProfileDocument(documentState);
   if (!result.ok) {
-    setStatus(t("notSaved"), true);
+    setStatus(`${t("notSaved")} ${result.errors[0] ?? ""}`.trim(), true);
     return;
   }
   try {
