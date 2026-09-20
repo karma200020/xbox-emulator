@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
+use unicode_normalization::UnicodeNormalization;
 use xib_controller_backend::ControllerState;
 use xib_protocol::InputEvent;
 
@@ -53,6 +54,8 @@ pub struct MouseSettings {
     pub invert_y: bool,
     pub deadzone: f32,
     pub curve: ResponseCurve,
+    pub smoothing: f32,
+    pub velocity_scale: f32,
 }
 
 impl Default for MouseSettings {
@@ -64,8 +67,44 @@ impl Default for MouseSettings {
             invert_y: false,
             deadzone: 0.0,
             curve: ResponseCurve::Linear,
+            smoothing: 0.0,
+            velocity_scale: 0.0,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AdsActivation {
+    Key { code: String },
+    MouseButton { button: u8 },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MouseModes {
+    pub hip: MouseSettings,
+    pub ads: MouseSettings,
+    pub ads_activation: Option<AdsActivation>,
+}
+
+impl Default for MouseModes {
+    fn default() -> Self {
+        let response = MouseSettings::default();
+        Self {
+            hip: response.clone(),
+            ads: response,
+            ads_activation: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GameAssociation {
+    pub title_id: String,
+    pub title_name: String,
+    pub aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -75,7 +114,8 @@ pub struct Profile {
     pub name: String,
     pub key_bindings: HashMap<String, Vec<Target>>,
     pub mouse_bindings: HashMap<u8, Vec<Target>>,
-    pub mouse: MouseSettings,
+    pub mouse: MouseModes,
+    pub game_associations: Vec<GameAssociation>,
 }
 
 impl Default for Profile {
@@ -108,7 +148,8 @@ impl Default for Profile {
             name: "Default".into(),
             key_bindings,
             mouse_bindings,
-            mouse: MouseSettings::default(),
+            mouse: MouseModes::default(),
+            game_associations: Vec::new(),
         }
     }
 }
@@ -149,10 +190,110 @@ impl Profile {
             }
             validate_targets(targets)?;
         }
-        validate_number(self.mouse.sensitivity_x, 0.001, 0.2, "sensitivity_x")?;
-        validate_number(self.mouse.sensitivity_y, 0.001, 0.2, "sensitivity_y")?;
-        validate_number(self.mouse.deadzone, 0.0, 0.95, "deadzone")
+        validate_mouse_settings(&self.mouse.hip, "mouse.hip")?;
+        validate_mouse_settings(&self.mouse.ads, "mouse.ads")?;
+        if let Some(source) = &self.mouse.ads_activation {
+            match source {
+                AdsActivation::Key { code } if !self.key_bindings.contains_key(code) => {
+                    return Err(profile_error(
+                        "mouse.ads_activation must reference an existing keyboard binding",
+                    ));
+                }
+                AdsActivation::MouseButton { button }
+                    if !self.mouse_bindings.contains_key(button) =>
+                {
+                    return Err(profile_error(
+                        "mouse.ads_activation must reference an existing mouse binding",
+                    ));
+                }
+                AdsActivation::Key { code } => validate_key_code(code)?,
+                AdsActivation::MouseButton { button } if *button > 4 => {
+                    return Err(profile_error("ADS mouse button source must be 0-4"));
+                }
+                AdsActivation::MouseButton { .. } => {}
+            }
+        }
+        validate_game_associations(&self.game_associations)
     }
+}
+
+fn validate_mouse_settings(
+    settings: &MouseSettings,
+    path: &str,
+) -> Result<(), ProfileValidationError> {
+    validate_number(
+        settings.sensitivity_x,
+        0.001,
+        0.2,
+        &format!("{path}.sensitivity_x"),
+    )?;
+    validate_number(
+        settings.sensitivity_y,
+        0.001,
+        0.2,
+        &format!("{path}.sensitivity_y"),
+    )?;
+    validate_number(settings.deadzone, 0.0, 0.95, &format!("{path}.deadzone"))?;
+    validate_number(settings.smoothing, 0.0, 0.95, &format!("{path}.smoothing"))?;
+    validate_number(
+        settings.velocity_scale,
+        0.0,
+        4.0,
+        &format!("{path}.velocity_scale"),
+    )
+}
+
+fn validate_game_associations(
+    associations: &[GameAssociation],
+) -> Result<(), ProfileValidationError> {
+    if associations.len() > 20 {
+        return Err(profile_error("game_associations exceeds 20 entries"));
+    }
+    let mut title_ids = HashSet::new();
+    for association in associations {
+        let bytes = association.title_id.as_bytes();
+        if !(1..=80).contains(&bytes.len())
+            || !bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+            || !bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+            || !bytes.iter().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'_' | b':' | b'-')
+            })
+        {
+            return Err(profile_error("game title id is not normalized"));
+        }
+        if !title_ids.insert(&association.title_id) {
+            return Err(profile_error("game title ids must be unique"));
+        }
+        validate_game_name(&association.title_name)?;
+        if association.aliases.len() > 10 {
+            return Err(profile_error("game aliases exceeds 10 entries"));
+        }
+        let mut aliases = HashSet::new();
+        for alias in &association.aliases {
+            validate_game_name(alias)?;
+            if alias == &association.title_name || !aliases.insert(alias) {
+                return Err(profile_error("game aliases must be unique"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_game_name(value: &str) -> Result<(), ProfileValidationError> {
+    if value.is_empty()
+        || value.encode_utf16().count() > 100
+        || value.trim() != value
+        || value.to_lowercase() != value
+        || !value.nfkc().eq(value.chars())
+        || value.split_whitespace().collect::<Vec<_>>().join(" ") != value
+    {
+        return Err(profile_error(
+            "game names and aliases must be normalized lowercase text",
+        ));
+    }
+    Ok(())
 }
 
 fn profile_error(message: impl Into<String>) -> ProfileValidationError {
@@ -176,16 +317,21 @@ fn validate_bindings(
         return Err(profile_error("key_bindings exceeds 128 bindings"));
     }
     for (source, targets) in bindings {
-        let mut characters = source.chars();
-        if source.len() > 64
-            || !characters
-                .next()
-                .is_some_and(|value| value.is_ascii_alphabetic())
-            || !characters.all(|value| value.is_ascii_alphanumeric())
-        {
-            return Err(profile_error("invalid keyboard source"));
-        }
+        validate_key_code(source)?;
         validate_targets(targets)?;
+    }
+    Ok(())
+}
+
+fn validate_key_code(source: &str) -> Result<(), ProfileValidationError> {
+    let mut characters = source.chars();
+    if source.len() > 64
+        || !characters
+            .next()
+            .is_some_and(|value| value.is_ascii_alphabetic())
+        || !characters.all(|value| value.is_ascii_alphanumeric())
+    {
+        return Err(profile_error("invalid keyboard source"));
     }
     Ok(())
 }
@@ -244,6 +390,14 @@ pub struct Mapper {
     profile: Profile,
     pressed_keys: HashSet<String>,
     pressed_mouse_buttons: HashSet<u8>,
+    previous_mouse: (f64, f64),
+    previous_mode: Option<MouseMode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MouseMode {
+    Hip,
+    Ads,
 }
 
 impl Mapper {
@@ -253,6 +407,8 @@ impl Mapper {
             profile,
             pressed_keys: HashSet::new(),
             pressed_mouse_buttons: HashSet::new(),
+            previous_mouse: (0.0, 0.0),
+            previous_mode: None,
         }
     }
 
@@ -264,12 +420,15 @@ impl Mapper {
     pub fn reset(&mut self) {
         self.pressed_keys.clear();
         self.pressed_mouse_buttons.clear();
+        self.reset_mouse();
     }
 
     #[must_use]
     pub fn apply_batch(&mut self, events: &[InputEvent]) -> ControllerState {
         let mut mouse_dx = 0_i32;
         let mut mouse_dy = 0_i32;
+        let mut mouse_mode = self.mouse_mode();
+        let mut movements = Vec::new();
 
         for event in events {
             match event {
@@ -293,9 +452,19 @@ impl Mapper {
                 }
                 InputEvent::Wheel { .. } => {}
             }
+            let next_mode = self.mouse_mode();
+            if next_mode != mouse_mode {
+                movements.push((mouse_mode, mouse_dx, mouse_dy));
+                mouse_dx = 0;
+                mouse_dy = 0;
+                mouse_mode = next_mode;
+            }
+        }
+        if mouse_dx != 0 || mouse_dy != 0 {
+            movements.push((mouse_mode, mouse_dx, mouse_dy));
         }
 
-        self.build_state(mouse_dx, mouse_dy)
+        self.build_state(&movements)
     }
 
     #[must_use]
@@ -324,7 +493,7 @@ impl Mapper {
         keys.chain(mouse)
     }
 
-    fn build_state(&self, mouse_dx: i32, mouse_dy: i32) -> ControllerState {
+    fn build_state(&mut self, movements: &[(MouseMode, i32, i32)]) -> ControllerState {
         let mut state = ControllerState::default();
         let mut left_x_negative = false;
         let mut left_x_positive = false;
@@ -345,21 +514,76 @@ impl Mapper {
 
         state.left_x = digital_axis(left_x_negative, left_x_positive);
         state.left_y = digital_axis(left_y_negative, left_y_positive);
-        state.right_x = mouse_axis(
-            mouse_dx,
-            self.profile.mouse.sensitivity_x,
-            self.profile.mouse.invert_x,
-            self.profile.mouse.deadzone,
-            self.profile.mouse.curve,
-        );
-        state.right_y = mouse_axis(
-            mouse_dy,
-            self.profile.mouse.sensitivity_y,
-            !self.profile.mouse.invert_y,
-            self.profile.mouse.deadzone,
-            self.profile.mouse.curve,
-        );
+        let (right_x, right_y) = self.mouse_axes(movements);
+        state.right_x = stick_axis(right_x);
+        state.right_y = stick_axis(right_y);
         state
+    }
+
+    fn mouse_mode(&self) -> MouseMode {
+        match &self.profile.mouse.ads_activation {
+            Some(AdsActivation::Key { code }) if self.pressed_keys.contains(code) => MouseMode::Ads,
+            Some(AdsActivation::MouseButton { button }) => {
+                if self.pressed_mouse_buttons.contains(button) {
+                    MouseMode::Ads
+                } else {
+                    MouseMode::Hip
+                }
+            }
+            Some(AdsActivation::Key { .. }) | None => MouseMode::Hip,
+        }
+    }
+
+    fn mouse_axes(&mut self, movements: &[(MouseMode, i32, i32)]) -> (f64, f64) {
+        if movements.is_empty() {
+            self.reset_mouse();
+            return (0.0, 0.0);
+        }
+        let mut combined = (0.0_f64, 0.0_f64);
+        for &(mode, dx, dy) in movements {
+            let output = self.mouse_segment(dx, dy, mode);
+            combined.0 = (combined.0 + output.0).clamp(-1.0, 1.0);
+            combined.1 = (combined.1 + output.1).clamp(-1.0, 1.0);
+        }
+        combined
+    }
+
+    fn mouse_segment(&mut self, dx: i32, dy: i32, mode: MouseMode) -> (f64, f64) {
+        if self.previous_mode != Some(mode) {
+            self.previous_mouse = (0.0, 0.0);
+        }
+        self.previous_mode = Some(mode);
+        let settings = match mode {
+            MouseMode::Hip => self.profile.mouse.hip.clone(),
+            MouseMode::Ads => self.profile.mouse.ads.clone(),
+        };
+        let target_x = mouse_axis(
+            dx,
+            settings.sensitivity_x,
+            settings.invert_x,
+            settings.deadzone,
+            settings.curve,
+            settings.velocity_scale,
+        );
+        let target_y = mouse_axis(
+            dy,
+            settings.sensitivity_y,
+            !settings.invert_y,
+            settings.deadzone,
+            settings.curve,
+            settings.velocity_scale,
+        );
+        let output = (
+            smooth_axis(target_x, self.previous_mouse.0, settings.smoothing, dx != 0),
+            smooth_axis(target_y, self.previous_mouse.1, settings.smoothing, dy != 0),
+        );
+        self.previous_mouse = output;
+        output
+    }
+
+    fn reset_mouse(&mut self) {
+        self.previous_mouse = (0.0, 0.0);
+        self.previous_mode = None;
     }
 }
 
@@ -371,32 +595,51 @@ fn digital_axis(negative: bool, positive: bool) -> i16 {
     }
 }
 
-#[allow(clippy::cast_possible_truncation)]
 fn mouse_axis(
     delta: i32,
     sensitivity: f32,
     invert: bool,
     deadzone: f32,
     curve: ResponseCurve,
-) -> i16 {
+    velocity_scale: f32,
+) -> f64 {
     if delta == 0 || !sensitivity.is_finite() || sensitivity <= 0.0 {
-        return 0;
+        return 0.0;
     }
     let direction = if invert { -1.0_f64 } else { 1.0_f64 };
-    let normalized = (f64::from(delta) * f64::from(sensitivity) * direction).clamp(-1.0, 1.0);
+    let velocity_multiplier =
+        1.0 + f64::from(velocity_scale.clamp(0.0, 4.0)) * (f64::from(delta).abs() / 100.0).min(1.0);
+    let normalized = (f64::from(delta) * f64::from(sensitivity) * velocity_multiplier * direction)
+        .clamp(-1.0, 1.0);
     let deadzone = f64::from(deadzone.clamp(0.0, 0.95));
     let scaled = if normalized.abs() <= deadzone {
         0.0
     } else {
         normalized.signum() * ((normalized.abs() - deadzone) / (1.0 - deadzone))
     };
-    let curved = scaled.signum()
+    scaled.signum()
         * match curve {
             ResponseCurve::Linear => scaled.abs(),
             ResponseCurve::Exponential => scaled.abs().powi(2),
             ResponseCurve::Precision => scaled.abs().powi(3),
-        };
-    (curved * f64::from(i16::MAX)).round() as i16
+        }
+}
+
+fn smooth_axis(target: f64, previous: f64, smoothing: f32, moved: bool) -> f64 {
+    if !moved || target == 0.0 {
+        return 0.0;
+    }
+    let factor = f64::from(smoothing.clamp(0.0, 0.95));
+    if factor == 0.0 || previous == 0.0 {
+        target
+    } else {
+        (previous * factor + target * (1.0 - factor)).clamp(-1.0, 1.0)
+    }
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn stick_axis(value: f64) -> i16 {
+    (value * f64::from(i16::MAX)).round() as i16
 }
 
 #[cfg(test)]
@@ -459,7 +702,7 @@ mod tests {
     fn minimum_vertical_delta_is_clamped_without_overflow() {
         for invert_y in [false, true] {
             let mut profile = Profile::default();
-            profile.mouse.invert_y = invert_y;
+            profile.mouse.hip.invert_y = invert_y;
             let mut mapper = Mapper::new(profile);
             let state = mapper.apply_batch(&[InputEvent::MouseMove {
                 dx: 0,
@@ -483,7 +726,7 @@ mod tests {
     fn validates_runtime_profile_bounds() {
         let mut profile = Profile::default();
         assert!(profile.validate().is_ok());
-        profile.mouse.sensitivity_x = 0.201;
+        profile.mouse.hip.sensitivity_x = 0.201;
         assert!(profile.validate().is_err());
         profile = Profile::default();
         profile.key_bindings.insert(
@@ -495,11 +738,143 @@ mod tests {
 
     #[test]
     fn response_curves_are_deterministic_and_distinct() {
-        let linear = mouse_axis(25, 0.02, false, 0.0, ResponseCurve::Linear);
-        let exponential = mouse_axis(25, 0.02, false, 0.0, ResponseCurve::Exponential);
-        let precision = mouse_axis(25, 0.02, false, 0.0, ResponseCurve::Precision);
+        let linear = stick_axis(mouse_axis(25, 0.02, false, 0.0, ResponseCurve::Linear, 0.0));
+        let exponential = stick_axis(mouse_axis(
+            25,
+            0.02,
+            false,
+            0.0,
+            ResponseCurve::Exponential,
+            0.0,
+        ));
+        let precision = stick_axis(mouse_axis(
+            25,
+            0.02,
+            false,
+            0.0,
+            ResponseCurve::Precision,
+            0.0,
+        ));
         assert_eq!(linear, 16_383);
         assert_eq!(exponential, 8_192);
         assert_eq!(precision, 4_096);
+    }
+
+    #[test]
+    fn switches_ads_response_while_configured_source_is_held() {
+        let mut profile = Profile::default();
+        profile.mouse.hip.sensitivity_x = 0.01;
+        profile.mouse.ads.sensitivity_x = 0.02;
+        profile.mouse.ads_activation = Some(AdsActivation::MouseButton { button: 2 });
+        let mut mapper = Mapper::new(profile);
+        let hip = mapper.apply_batch(&[InputEvent::MouseMove { dx: 10, dy: 0 }]);
+        let ads = mapper.apply_batch(&[
+            InputEvent::MouseButton {
+                button: 2,
+                down: true,
+            },
+            InputEvent::MouseMove { dx: 10, dy: 0 },
+        ]);
+        assert_eq!(hip.right_x, 3_277);
+        assert_eq!(ads.right_x, 6_553);
+    }
+
+    #[test]
+    fn applies_each_response_to_movement_in_event_order() {
+        let mut profile = Profile::default();
+        profile.mouse.hip.sensitivity_x = 0.01;
+        profile.mouse.ads.sensitivity_x = 0.02;
+        profile.mouse.ads_activation = Some(AdsActivation::MouseButton { button: 2 });
+        let mut mapper = Mapper::new(profile);
+        let state = mapper.apply_batch(&[
+            InputEvent::MouseMove { dx: 10, dy: 0 },
+            InputEvent::MouseButton {
+                button: 2,
+                down: true,
+            },
+            InputEvent::MouseMove { dx: 10, dy: 0 },
+        ]);
+        assert_eq!(state.right_x, 9_830);
+    }
+
+    #[test]
+    fn smoothing_is_deterministic_but_empty_batches_neutralize_immediately() {
+        let mut profile = Profile::default();
+        profile.mouse.hip.sensitivity_x = 0.01;
+        profile.mouse.hip.smoothing = 0.5;
+        let mut mapper = Mapper::new(profile);
+        assert_eq!(
+            mapper
+                .apply_batch(&[InputEvent::MouseMove { dx: 10, dy: 0 }])
+                .right_x,
+            3_277
+        );
+        assert_eq!(
+            mapper
+                .apply_batch(&[InputEvent::MouseMove { dx: 20, dy: 0 }])
+                .right_x,
+            4_915
+        );
+        assert_eq!(mapper.apply_batch(&[]).right_x, 0);
+        assert_eq!(
+            mapper
+                .apply_batch(&[InputEvent::MouseMove { dx: 20, dy: 0 }])
+                .right_x,
+            6_553
+        );
+    }
+
+    #[test]
+    fn ads_transitions_without_movement_reset_smoothing() {
+        let mut profile = Profile::default();
+        profile.mouse.hip.sensitivity_x = 0.01;
+        profile.mouse.hip.smoothing = 0.5;
+        profile.mouse.ads_activation = Some(AdsActivation::MouseButton { button: 2 });
+        let mut mapper = Mapper::new(profile);
+        assert_eq!(
+            mapper
+                .apply_batch(&[InputEvent::MouseMove { dx: 10, dy: 0 }])
+                .right_x,
+            3_277
+        );
+        assert_eq!(
+            mapper
+                .apply_batch(&[
+                    InputEvent::MouseButton {
+                        button: 2,
+                        down: true,
+                    },
+                    InputEvent::MouseButton {
+                        button: 2,
+                        down: false,
+                    },
+                    InputEvent::MouseMove { dx: 20, dy: 0 },
+                ])
+                .right_x,
+            6_553
+        );
+    }
+
+    #[test]
+    fn v2_profile_json_contains_advanced_fields_and_rejects_unknown_fields() {
+        let value = serde_json::to_value(Profile::default()).unwrap();
+        assert_eq!(value["mouse"]["hip"]["smoothing"], 0.0);
+        assert_eq!(value["mouse"]["ads"]["velocity_scale"], 0.0);
+        assert_eq!(value["game_associations"], serde_json::json!([]));
+
+        let mut invalid = value;
+        invalid["mouse"]["hip"]["unknown"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<Profile>(invalid).is_err());
+    }
+
+    #[test]
+    fn rejects_non_nfkc_game_names() {
+        let mut profile = Profile::default();
+        profile.game_associations.push(GameAssociation {
+            title_id: "cafe".into(),
+            title_name: "cafe\u{301}".into(),
+            aliases: Vec::new(),
+        });
+        assert!(profile.validate().is_err());
     }
 }

@@ -1,7 +1,7 @@
-import type { Profile } from "./profile-schema";
+import { PROFILE_SCHEMA_VERSION, type Profile } from "./profile-schema";
 
 export const PROTOCOL_VERSION = 1;
-export const PROFILE_SCHEMA_VERSION = 1;
+export { PROFILE_SCHEMA_VERSION };
 export const NATIVE_HOST = "com.xib.companion";
 export const MAX_BATCH_EVENTS = 512;
 

@@ -6,7 +6,7 @@ pub const MAX_BATCH_EVENTS: usize = 512;
 pub const MAX_PROFILE_ID_BYTES: usize = 40;
 pub const MAX_KEY_CODE_BYTES: usize = 64;
 pub const MAX_REASON_BYTES: usize = 256;
-pub const PROFILE_SCHEMA_VERSION: u16 = 1;
+pub const PROFILE_SCHEMA_VERSION: u16 = 2;
 pub const MAX_PROFILE_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

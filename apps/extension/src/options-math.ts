@@ -33,10 +33,19 @@ export function mouseAxis(
   invert: boolean,
   deadzone: number,
   curve: ResponseCurve,
+  velocityScale = 0,
 ): number {
   if (delta === 0 || !Number.isFinite(sensitivity) || sensitivity <= 0) return 0;
   const direction = invert ? -1 : 1;
-  return applyResponseCurve(delta * Math.fround(sensitivity) * direction, deadzone, curve);
+  const boundedVelocityScale = Number.isFinite(velocityScale)
+    ? Math.max(0, Math.min(4, velocityScale))
+    : 0;
+  const velocityMultiplier = 1 + boundedVelocityScale * Math.min(Math.abs(delta) / 100, 1);
+  return applyResponseCurve(
+    delta * Math.fround(sensitivity) * velocityMultiplier * direction,
+    deadzone,
+    curve,
+  );
 }
 
 export function previewPoints(deadzone: number, curve: ResponseCurve, steps = 64): [number, number][] {
@@ -97,7 +106,21 @@ function roundSensitivity(value: number): number {
 
 export function normalizedStick(sample: CalibrationSample, settings: MouseSettings): CalibrationSample {
   return {
-    dx: mouseAxis(sample.dx, settings.sensitivity_x, settings.invert_x, settings.deadzone, settings.curve),
-    dy: mouseAxis(-sample.dy, settings.sensitivity_y, settings.invert_y, settings.deadzone, settings.curve),
+    dx: mouseAxis(
+      sample.dx,
+      settings.sensitivity_x,
+      settings.invert_x,
+      settings.deadzone,
+      settings.curve,
+      settings.velocity_scale,
+    ),
+    dy: mouseAxis(
+      -sample.dy,
+      settings.sensitivity_y,
+      settings.invert_y,
+      settings.deadzone,
+      settings.curve,
+      settings.velocity_scale,
+    ),
   };
 }

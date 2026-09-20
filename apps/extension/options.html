@@ -45,8 +45,22 @@
         </section>
 
         <section class="card" aria-labelledby="aim-heading">
-          <h2 id="aim-heading">Mouse response</h2>
-          <p class="help">Tune right-stick response. Values are bounded before they can be saved.</p>
+          <div class="section-title">
+            <div>
+              <h2 id="aim-heading">Mouse response</h2>
+              <p class="help">Tune transient right-stick output. This remains subject to each game's controller limits and is not native mouse input.</p>
+            </div>
+            <label>Editing mode
+              <select id="response-mode">
+                <option value="hip">Hip</option>
+                <option value="ads">Aim down sights (ADS)</option>
+              </select>
+            </label>
+          </div>
+          <label class="ads-source">Hold source for ADS response
+            <select id="ads-source"></select>
+            <span class="help">Choose an existing binding. None keeps the hip response active.</span>
+          </label>
           <div class="grid controls">
             <label>Sensitivity X
               <input id="sensitivity-x" type="number" min="0.001" max="0.2" step="0.001" required>
@@ -63,6 +77,12 @@
                 <option value="precision">Precision</option>
                 <option value="exponential">Exponential</option>
               </select>
+            </label>
+            <label>Smoothing
+              <input id="smoothing" type="number" min="0" max="0.95" step="0.05" required>
+            </label>
+            <label>Velocity scaling
+              <input id="velocity-scale" type="number" min="0" max="4" step="0.1" required>
             </label>
           </div>
           <div class="checks">
@@ -97,6 +117,17 @@
                 <button id="apply-suggestion" type="button" class="secondary">Apply to X and Y</button>
               </div>
             </section>
+
+            <section class="card" aria-labelledby="games-heading">
+              <div class="section-title">
+                <div>
+                  <h2 id="games-heading">Game associations</h2>
+                  <p class="help">Optional normalized metadata for future profile selection. This version does not inspect pages or switch profiles automatically.</p>
+                </div>
+                <button id="add-game" type="button" class="secondary">Add game</button>
+              </div>
+              <div id="game-associations"></div>
+            </section>
           </div>
         </section>
 
@@ -118,7 +149,7 @@
         </div>
 
         <section id="conflicts-card" class="card warning" aria-labelledby="conflicts-heading" hidden>
-          <h2 id="conflicts-heading">Duplicate binding warnings</h2>
+          <h2 id="conflicts-heading">Profile warnings</h2>
           <ul id="conflicts"></ul>
         </section>
       </form>

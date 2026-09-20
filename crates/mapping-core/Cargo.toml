@@ -6,9 +6,12 @@ license.workspace = true
 
 [dependencies]
 serde.workspace = true
+unicode-normalization.workspace = true
 xib-controller-backend = { path = "../controller-backend" }
 xib-protocol = { path = "../protocol" }
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true
-

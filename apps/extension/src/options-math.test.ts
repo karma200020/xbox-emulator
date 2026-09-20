@@ -19,6 +19,7 @@ describe("response curve preview math", () => {
     expect(mouseAxis(25, 0.02, false, 0, "precision")).toBeCloseTo(0.125);
     expect(mouseAxis(5, 0.02, false, 0.1, "linear")).toBe(0);
     expect(mouseAxis(10, 0.02, true, 0.1, "linear")).toBeCloseTo(-1 / 9);
+    expect(mouseAxis(50, 0.01, false, 0, "linear", 1)).toBeCloseTo(0.75);
     expect(applyResponseCurve(3, 0, "linear")).toBe(1);
   });
 

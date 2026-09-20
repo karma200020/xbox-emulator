@@ -1,10 +1,19 @@
-import { BUTTONS, type Profile, type ResponseCurve, type Target } from "./profile-schema";
+import {
+  BUTTONS,
+  type AdsActivation,
+  type MouseSettings,
+  type Profile,
+  type ResponseCurve,
+  type Target,
+} from "./profile-schema";
 import type { InputEvent } from "./protocol";
 
 export interface XboxState {
   buttons: readonly number[];
   axes: readonly number[];
 }
+
+type MovementSegment = { mode: "hip" | "ads"; dx: number; dy: number };
 
 const BUTTON_INDEX = new Map<number, number>([
   [BUTTONS.a, 0], [BUTTONS.b, 1], [BUTTONS.x, 2], [BUTTONS.y, 3],
@@ -18,32 +27,46 @@ export class BrowserGamepadMapper {
   readonly #profile: Profile;
   readonly #keys = new Set<string>();
   readonly #mouseButtons = new Set<number>();
+  #previousMouse: [number, number] = [0, 0];
+  #previousMode: "hip" | "ads" | null = null;
 
   constructor(profile: Profile) {
     this.#profile = structuredClone(profile);
   }
 
   apply(events: readonly InputEvent[]): XboxState {
-    let dx = 0;
-    let dy = 0;
+    const movements: MovementSegment[] = [];
+    let segment: MovementSegment = { mode: this.#mouseMode(), dx: 0, dy: 0 };
+    const finishSegment = (force = false): void => {
+      if (force || segment.dx !== 0 || segment.dy !== 0) movements.push(segment);
+    };
     for (const event of events) {
-      if (event.kind === "key") updateSet(this.#keys, event.code, event.down);
-      else if (event.kind === "mouse_button") updateSet(this.#mouseButtons, event.button, event.down);
-      else if (event.kind === "mouse_move") {
-        dx = saturatingAdd(dx, event.dx);
-        dy = saturatingAdd(dy, event.dy);
+      if (event.kind === "key" || event.kind === "mouse_button") {
+        const previousMode = segment.mode;
+        if (event.kind === "key") updateSet(this.#keys, event.code, event.down);
+        else updateSet(this.#mouseButtons, event.button, event.down);
+        const nextMode = this.#mouseMode();
+        if (nextMode !== previousMode) {
+          finishSegment(true);
+          segment = { mode: nextMode, dx: 0, dy: 0 };
+        }
+      } else if (event.kind === "mouse_move") {
+        segment.dx = saturatingAdd(segment.dx, event.dx);
+        segment.dy = saturatingAdd(segment.dy, event.dy);
       }
     }
-    return this.#state(dx, dy);
+    finishSegment();
+    return this.#state(movements);
   }
 
   reset(): XboxState {
     this.#keys.clear();
     this.#mouseButtons.clear();
+    this.#resetMouse();
     return neutralState();
   }
 
-  #state(dx: number, dy: number): XboxState {
+  #state(movements: readonly MovementSegment[]): XboxState {
     const targets: Target[] = [];
     for (const code of this.#keys) {
       if (Object.hasOwn(this.#profile.key_bindings, code)) {
@@ -71,17 +94,60 @@ export class BrowserGamepadMapper {
       else if (target === "left_y_positive") lyPositive = true;
     }
 
+    const mouse = this.#mouseAxes(movements);
     return {
       buttons,
       axes: [
         digitalAxis(lxNegative, lxPositive),
         -digitalAxis(lyNegative, lyPositive),
-        mouseAxis(dx, this.#profile.mouse.sensitivity_x, this.#profile.mouse.invert_x,
-          this.#profile.mouse.deadzone, this.#profile.mouse.curve),
-        mouseAxis(dy, this.#profile.mouse.sensitivity_y, this.#profile.mouse.invert_y,
-          this.#profile.mouse.deadzone, this.#profile.mouse.curve),
+        mouse[0],
+        mouse[1],
       ],
     };
+  }
+
+  #mouseMode(): "hip" | "ads" {
+    return isSourceHeld(this.#profile.mouse.ads_activation, this.#keys, this.#mouseButtons)
+      ? "ads"
+      : "hip";
+  }
+
+  #mouseAxes(movements: readonly MovementSegment[]): [number, number] {
+    if (movements.length === 0) {
+      this.#resetMouse();
+      return [0, 0];
+    }
+    let combinedX = 0;
+    let combinedY = 0;
+    for (const { dx, dy, mode } of movements) {
+      const [x, y] = this.#mouseSegment(dx, dy, mode);
+      combinedX = clamp(combinedX + x, -1, 1);
+      combinedY = clamp(combinedY + y, -1, 1);
+    }
+    return [combinedX, combinedY];
+  }
+
+  #mouseSegment(dx: number, dy: number, mode: "hip" | "ads"): [number, number] {
+    if (mode !== this.#previousMode) this.#previousMouse = [0, 0];
+    this.#previousMode = mode;
+    const settings = this.#profile.mouse[mode];
+    const targets: [number, number] = [
+      mouseAxis(dx, settings.sensitivity_x, settings.invert_x, settings.deadzone,
+        settings.curve, settings.velocity_scale),
+      mouseAxis(dy, settings.sensitivity_y, settings.invert_y, settings.deadzone,
+        settings.curve, settings.velocity_scale),
+    ];
+    const output: [number, number] = [
+      smoothAxis(targets[0], this.#previousMouse[0], settings.smoothing, dx !== 0),
+      smoothAxis(targets[1], this.#previousMouse[1], settings.smoothing, dy !== 0),
+    ];
+    this.#previousMouse = output;
+    return output;
+  }
+
+  #resetMouse(): void {
+    this.#previousMouse = [0, 0];
+    this.#previousMode = null;
   }
 }
 
@@ -95,9 +161,12 @@ export function mouseAxis(
   invert: boolean,
   deadzone: number,
   curve: ResponseCurve,
+  velocityScale = 0,
 ): number {
   if (delta === 0 || !Number.isFinite(sensitivity) || sensitivity <= 0) return 0;
-  const normalized = clamp(delta * sensitivity * (invert ? -1 : 1), -1, 1);
+  const safeVelocityScale = clampFinite(velocityScale, 0, 4, 0);
+  const velocityMultiplier = 1 + safeVelocityScale * Math.min(Math.abs(delta) / 100, 1);
+  const normalized = clamp(delta * sensitivity * velocityMultiplier * (invert ? -1 : 1), -1, 1);
   const safeDeadzone = clamp(deadzone, 0, 0.95);
   const scaled = Math.abs(normalized) <= safeDeadzone
     ? 0
@@ -106,6 +175,20 @@ export function mouseAxis(
     ? Math.abs(scaled)
     : curve === "exponential" ? Math.abs(scaled) ** 2 : Math.abs(scaled) ** 3;
   return Math.sign(scaled) * magnitude;
+}
+
+export function applyMouseSettings(
+  delta: number,
+  settings: MouseSettings,
+): number {
+  return mouseAxis(
+    delta,
+    settings.sensitivity_x,
+    settings.invert_x,
+    settings.deadzone,
+    settings.curve,
+    settings.velocity_scale,
+  );
 }
 
 function digitalAxis(negative: boolean, positive: boolean): number {
@@ -117,10 +200,30 @@ function updateSet<T>(set: Set<T>, value: T, down: boolean): void {
   else set.delete(value);
 }
 
+function isSourceHeld(
+  source: AdsActivation | null,
+  keys: ReadonlySet<string>,
+  mouseButtons: ReadonlySet<number>,
+): boolean {
+  if (!source) return false;
+  return source.type === "key" ? keys.has(source.code) : mouseButtons.has(source.button);
+}
+
+function smoothAxis(target: number, previous: number, smoothing: number, moved: boolean): number {
+  if (!moved || target === 0) return 0;
+  const factor = clampFinite(smoothing, 0, 0.95, 0);
+  if (factor === 0 || previous === 0) return target;
+  return clamp(previous * factor + target * (1 - factor), -1, 1);
+}
+
 function saturatingAdd(left: number, right: number): number {
   return clamp(left + right, -2_147_483_648, 2_147_483_647);
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function clampFinite(value: number, minimum: number, maximum: number, fallback: number): number {
+  return Number.isFinite(value) ? clamp(value, minimum, maximum) : fallback;
 }

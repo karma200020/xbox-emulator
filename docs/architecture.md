@@ -196,6 +196,13 @@ and applied atomically. Invalid or partially received configuration never
 replaces the last valid inactive configuration. Mapping changes while active
 first neutralize, reset core state, then activate with the new configuration.
 
+Profile schema v2 carries bounded hip and ADS response settings plus optional
+normalized game-association metadata. The browser and Rust mappers use the same
+ADS source, velocity-scaling, curve, and smoothing semantics. The v1 migration
+copies the former response into both modes with all advanced effects disabled.
+Game metadata is not consulted at runtime in this layer, so no page-content
+inspection or automatic profile switching occurs.
+
 ## Failure handling and invariants
 
 Neutral means all buttons released, triggers zero, and both sticks centered.

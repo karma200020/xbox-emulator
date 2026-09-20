@@ -5,11 +5,13 @@ import {
   PROFILE_STORAGE_KEY,
   createStarterProfiles,
   duplicateBindingWarnings,
+  normalizeGameText,
   parseProfileDocument,
   parseProfileJson,
   type Profile,
   type ProfileDocument,
   type ResponseCurve,
+  type MouseSettings,
   type Target,
 } from "./profile-schema";
 import {
@@ -28,6 +30,8 @@ const elements = {
   profile: requireElement<HTMLSelectElement>("profile"),
   name: requireElement<HTMLInputElement>("profile-name"),
   id: requireElement<HTMLInputElement>("profile-id"),
+  responseMode: requireElement<HTMLSelectElement>("response-mode"),
+  adsSource: requireElement<HTMLSelectElement>("ads-source"),
   sensitivityX: requireElement<HTMLInputElement>("sensitivity-x"),
   sensitivityY: requireElement<HTMLInputElement>("sensitivity-y"),
   deadzone: requireElement<HTMLInputElement>("deadzone"),
@@ -35,6 +39,8 @@ const elements = {
   curveLine: requireElement<SVGPolylineElement>("curve-line"),
   invertX: requireElement<HTMLInputElement>("invert-x"),
   invertY: requireElement<HTMLInputElement>("invert-y"),
+  smoothing: requireElement<HTMLInputElement>("smoothing"),
+  velocityScale: requireElement<HTMLInputElement>("velocity-scale"),
   calibrationSurface: requireElement<HTMLDivElement>("calibration-surface"),
   calibrationState: requireElement<HTMLSpanElement>("calibration-state"),
   calibrationValues: requireElement<HTMLOutputElement>("calibration-values"),
@@ -46,6 +52,7 @@ const elements = {
   applySuggestion: requireElement<HTMLButtonElement>("apply-suggestion"),
   keys: requireElement<HTMLDivElement>("key-bindings"),
   mouse: requireElement<HTMLDivElement>("mouse-bindings"),
+  games: requireElement<HTMLDivElement>("game-associations"),
   conflictsCard: requireElement<HTMLElement>("conflicts-card"),
   conflicts: requireElement<HTMLUListElement>("conflicts"),
   importFile: requireElement<HTMLInputElement>("import-file"),
@@ -66,10 +73,13 @@ requireElement<HTMLButtonElement>("duplicate-profile").addEventListener("click",
 requireElement<HTMLButtonElement>("delete-profile").addEventListener("click", deleteProfile);
 requireElement<HTMLButtonElement>("add-key").addEventListener("click", () => addBinding(false));
 requireElement<HTMLButtonElement>("add-mouse").addEventListener("click", () => addBinding(true));
+requireElement<HTMLButtonElement>("add-game").addEventListener("click", addGameAssociation);
 elements.startCalibration.addEventListener("click", () => void startCalibration());
 elements.stopCalibration.addEventListener("click", () => stopCalibration("Stopped"));
 elements.applySuggestion.addEventListener("click", applySuggestion);
 elements.importFile.addEventListener("change", () => void importProfiles());
+elements.responseMode.addEventListener("change", render);
+elements.adsSource.addEventListener("change", updateAdsSource);
 elements.profile.addEventListener("change", () => {
   stopCalibration("Stopped");
   selectedProfileId = elements.profile.value;
@@ -87,8 +97,128 @@ for (const input of [
   elements.curve,
   elements.invertX,
   elements.invertY,
+  elements.smoothing,
+  elements.velocityScale,
 ]) {
   input.addEventListener("input", updateSettings);
+}
+
+function selectedResponse(): MouseSettings {
+  return selectedProfile().mouse[elements.responseMode.value === "ads" ? "ads" : "hip"];
+}
+
+function renderAdsSources(profile: Profile): void {
+  const selected = encodeAdsSource(profile.mouse.ads_activation);
+  const sources: [string, string][] = [
+    ["", "None"],
+    ...Object.keys(profile.key_bindings)
+      .sort()
+      .map((code): [string, string] => [`key:${code}`, `Keyboard: ${code}`]),
+    ...Object.keys(profile.mouse_bindings)
+      .sort()
+      .map((button): [string, string] => [`mouse:${button}`, `Mouse button ${button}`]),
+  ];
+  elements.adsSource.replaceChildren(
+    ...sources.map(([value, label]) => option(value, label, value === selected)),
+  );
+}
+
+function updateAdsSource(): void {
+  const value = elements.adsSource.value;
+  selectedProfile().mouse.ads_activation = value === ""
+    ? null
+    : value.startsWith("key:")
+      ? { type: "key", code: value.slice(4) }
+      : { type: "mouse_button", button: Number(value.slice(6)) };
+  changed();
+}
+
+function encodeAdsSource(source: Profile["mouse"]["ads_activation"]): string {
+  if (!source) return "";
+  return source.type === "key" ? `key:${source.code}` : `mouse:${source.button}`;
+}
+
+function clearAdsSourceIfRemoved(source: string, isMouse: boolean): void {
+  const activation = selectedProfile().mouse.ads_activation;
+  if (
+    (activation?.type === "key" && !isMouse && activation.code === source) ||
+    (activation?.type === "mouse_button" && isMouse && activation.button === Number(source))
+  ) {
+    selectedProfile().mouse.ads_activation = null;
+  }
+}
+
+function addGameAssociation(): void {
+  const associations = selectedProfile().game_associations;
+  if (associations.length >= 20) {
+    setStatus("A maximum of 20 game associations is supported.", true);
+    return;
+  }
+  let suffix = associations.length + 1;
+  while (associations.some(({ title_id }) => title_id === `game-${suffix}`)) suffix += 1;
+  associations.push({ title_id: `game-${suffix}`, title_name: `game ${suffix}`, aliases: [] });
+  changed(true);
+}
+
+function renderGameAssociations(profile: Profile): void {
+  elements.games.replaceChildren(...profile.game_associations.map((association, index) => {
+    const row = document.createElement("div");
+    row.className = "game-row";
+    const titleId = gameInput("Title ID", association.title_id);
+    const titleName = gameInput("Normalized title name", association.title_name);
+    const aliases = gameAliasesInput(association.aliases);
+    titleId.addEventListener("input", markPendingEdit);
+    titleName.addEventListener("input", markPendingEdit);
+    aliases.addEventListener("input", markPendingEdit);
+    titleId.addEventListener("change", () => {
+      association.title_id = normalizeGameText(titleId.value).replace(/\s+/g, "-");
+      changed(true);
+    });
+    titleName.addEventListener("change", () => {
+      association.title_name = normalizeGameText(titleName.value);
+      changed(true);
+    });
+    aliases.addEventListener("change", () => {
+      association.aliases = [...new Set(
+        aliases.value.split(/\r?\n/).map(normalizeGameText).filter(Boolean),
+      )].filter((alias) => alias !== association.title_name);
+      changed(true);
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `Remove game association ${index + 1}`);
+    remove.addEventListener("click", () => {
+      profile.game_associations.splice(index, 1);
+      changed(true);
+    });
+    row.append(titleId, titleName, aliases, remove);
+    return row;
+  }));
+}
+
+function gameInput(label: string, value: string): HTMLInputElement {
+  const input = document.createElement("input");
+  input.value = value;
+  input.maxLength = label === "Title ID" ? 80 : 1000;
+  input.setAttribute("aria-label", label);
+  return input;
+}
+
+function gameAliasesInput(values: readonly string[]): HTMLTextAreaElement {
+  const input = document.createElement("textarea");
+  input.value = values.join("\n");
+  input.maxLength = 1000;
+  input.rows = 3;
+  input.placeholder = "One normalized alias per line";
+  input.setAttribute("aria-label", "Normalized aliases, one per line");
+  return input;
+}
+
+function markPendingEdit(): void {
+  dirty = true;
+  setStatus("Unsaved changes.");
 }
 
 window.addEventListener("beforeunload", (event) => {
@@ -142,12 +272,17 @@ function render(): void {
   );
   elements.name.value = profile.name;
   elements.id.value = profile.id;
-  elements.sensitivityX.value = String(profile.mouse.sensitivity_x);
-  elements.sensitivityY.value = String(profile.mouse.sensitivity_y);
-  elements.deadzone.value = String(profile.mouse.deadzone);
-  elements.curve.value = profile.mouse.curve;
-  elements.invertX.checked = profile.mouse.invert_x;
-  elements.invertY.checked = profile.mouse.invert_y;
+  const response = selectedResponse();
+  elements.sensitivityX.value = String(response.sensitivity_x);
+  elements.sensitivityY.value = String(response.sensitivity_y);
+  elements.deadzone.value = String(response.deadzone);
+  elements.curve.value = response.curve;
+  elements.invertX.checked = response.invert_x;
+  elements.invertY.checked = response.invert_y;
+  elements.smoothing.value = String(response.smoothing);
+  elements.velocityScale.value = String(response.velocity_scale);
+  renderAdsSources(profile);
+  renderGameAssociations(profile);
   renderCurvePreview();
   renderBindings(elements.keys, profile.key_bindings, false);
   renderBindings(elements.mouse, profile.mouse_bindings, true);
@@ -224,6 +359,7 @@ function renderBindings(
       remove.setAttribute("aria-label", `Remove ${source} binding`);
       remove.addEventListener("click", () => {
         delete bindings[source];
+        clearAdsSourceIfRemoved(source, isMouse);
         changed(true);
       });
       row.append(sourceInput, targetList, remove);
@@ -237,12 +373,15 @@ function updateSettings(): void {
   const previousId = profile.id;
   profile.name = elements.name.value;
   profile.id = elements.id.value;
-  profile.mouse.sensitivity_x = elements.sensitivityX.valueAsNumber;
-  profile.mouse.sensitivity_y = elements.sensitivityY.valueAsNumber;
-  profile.mouse.deadzone = elements.deadzone.valueAsNumber;
-  profile.mouse.curve = elements.curve.value as ResponseCurve;
-  profile.mouse.invert_x = elements.invertX.checked;
-  profile.mouse.invert_y = elements.invertY.checked;
+  const response = selectedResponse();
+  response.sensitivity_x = elements.sensitivityX.valueAsNumber;
+  response.sensitivity_y = elements.sensitivityY.valueAsNumber;
+  response.deadzone = elements.deadzone.valueAsNumber;
+  response.curve = elements.curve.value as ResponseCurve;
+  response.invert_x = elements.invertX.checked;
+  response.invert_y = elements.invertY.checked;
+  response.smoothing = elements.smoothing.valueAsNumber;
+  response.velocity_scale = elements.velocityScale.valueAsNumber;
   renderCurvePreview();
   if (profile.id !== previousId) {
     selectedProfileId = profile.id;
@@ -270,6 +409,12 @@ function renameBinding(
   }
   bindings[newSource] = bindings[oldSource]!;
   delete bindings[oldSource];
+  const activation = selectedProfile().mouse.ads_activation;
+  if (activation?.type === "key" && !isMouse && activation.code === oldSource) {
+    activation.code = newSource;
+  } else if (activation?.type === "mouse_button" && isMouse && activation.button === Number(oldSource)) {
+    activation.button = Number(newSource);
+  }
   changed(true);
 }
 
@@ -398,7 +543,11 @@ function changed(rerender = false): void {
 }
 
 function renderConflicts(profile: Profile): void {
-  const warnings = duplicateBindingWarnings(profile);
+  const validation = parseProfileDocument(documentState);
+  const gameWarnings = validation.ok
+    ? []
+    : validation.errors.filter((error) => error.startsWith("Game association "));
+  const warnings = [...duplicateBindingWarnings(profile), ...gameWarnings];
   elements.conflicts.replaceChildren(...warnings.map((warning) => {
     const item = document.createElement("li");
     item.textContent = warning;
@@ -467,7 +616,7 @@ function stopCalibration(label: string): void {
 }
 
 function renderCalibration(sample: CalibrationSample): void {
-  const stick = normalizedStick(sample, selectedProfile().mouse);
+  const stick = normalizedStick(sample, selectedResponse());
   elements.calibrationValues.value =
     `Raw Δ ${sample.dx}, ${sample.dy} · Stick ${stick.dx.toFixed(3)}, ${stick.dy.toFixed(3)} · ${calibrationSamples.length} samples`;
   elements.stickDot.style.left = `${50 + stick.dx * 46}%`;

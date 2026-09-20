@@ -30,7 +30,10 @@ describe("profile schema", () => {
         {
           ...profile,
           unexpected: true,
-          mouse: { ...profile.mouse, sensitivity_x: Number.POSITIVE_INFINITY, deadzone: 1 },
+          mouse: {
+            ...profile.mouse,
+            hip: { ...profile.mouse.hip, sensitivity_x: Number.POSITIVE_INFINITY, deadzone: 1 },
+          },
         },
       ],
     });
@@ -38,7 +41,7 @@ describe("profile schema", () => {
     if (!result.ok) {
       expect(result.errors).toEqual(expect.arrayContaining([
         expect.stringContaining("unexpected"),
-        expect.stringContaining("sensitivity_x"),
+        expect.stringContaining("mouse.hip.sensitivity_x"),
         expect.stringContaining("deadzone"),
       ]));
     }
@@ -53,7 +56,7 @@ describe("profile schema", () => {
     expect(parseProfileJson(`"${"x".repeat(300_000)}"`).ok).toBe(false);
   });
 
-  it("migrates the current unversioned mapping profile", () => {
+  it("migrates an unversioned mapping profile without changing its response", () => {
     const result = parseProfileDocument({
       id: "custom-profile",
       key_bindings: { KeyW: ["left_y_positive"], Space: [{ button: BUTTONS.a }] },
@@ -69,8 +72,91 @@ describe("profile schema", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.migrated).toBe(true);
+      expect(result.value.schema_version).toBe(2);
       expect(result.value.profiles[0]!.name).toBe("Custom Profile");
-      expect(result.value.profiles[0]!.mouse.curve).toBe("linear");
+      expect(result.value.profiles[0]!.mouse.hip.curve).toBe("linear");
+      expect(result.value.profiles[0]!.mouse.ads).toEqual(result.value.profiles[0]!.mouse.hip);
+      expect(result.value.profiles[0]!.mouse.ads_activation).toBeNull();
+      expect(result.value.profiles[0]!.game_associations).toEqual([]);
+    }
+  });
+
+  it("migrates a versioned v1 document and round-trips v2 JSON", () => {
+    const legacy = {
+      schema_version: 1,
+      active_profile_id: "legacy",
+      profiles: [{
+        id: "legacy",
+        name: "Legacy",
+        key_bindings: { KeyW: ["left_y_positive"] },
+        mouse_bindings: { "0": ["right_trigger"] },
+        mouse: {
+          sensitivity_x: 0.018,
+          sensitivity_y: 0.02,
+          invert_x: false,
+          invert_y: true,
+          deadzone: 0.1,
+          curve: "precision",
+        },
+      }],
+    };
+    const migrated = parseProfileDocument(legacy);
+    expect(migrated.ok).toBe(true);
+    if (!migrated.ok) return;
+    expect(migrated.migrated).toBe(true);
+    expect(migrated.value.profiles[0]!.mouse.hip).toEqual({
+      ...legacy.profiles[0]!.mouse,
+      smoothing: 0,
+      velocity_scale: 0,
+    });
+    expect(parseProfileJson(JSON.stringify(migrated.value))).toEqual({
+      ok: true,
+      value: migrated.value,
+      migrated: false,
+    });
+  });
+
+  it("enforces finite advanced bounds and an existing ADS source", () => {
+    const document = createStarterProfiles();
+    const profile = document.profiles[0]!;
+    profile.mouse.hip.smoothing = Number.NaN;
+    profile.mouse.ads.velocity_scale = 4.1;
+    profile.mouse.ads_activation = { type: "key", code: "KeyZ" };
+    const result = parseProfileDocument(document);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toEqual(expect.arrayContaining([
+        expect.stringContaining("smoothing"),
+        expect.stringContaining("velocity_scale"),
+        expect.stringContaining("existing keyboard binding"),
+      ]));
+    }
+  });
+
+  it("validates normalized game metadata and rejects cross-profile conflicts", () => {
+    const document = createStarterProfiles();
+    document.profiles[0]!.game_associations = [{
+      title_id: "halo-infinite",
+      title_name: "halo infinite",
+      aliases: ["halo 6"],
+    }];
+    document.profiles[1]!.game_associations = [{
+      title_id: "other-id",
+      title_name: "other game",
+      aliases: ["halo infinite"],
+    }];
+    const conflict = parseProfileDocument(document);
+    expect(conflict.ok).toBe(false);
+    if (!conflict.ok) {
+      expect(conflict.errors).toContain('Game association "halo infinite" is assigned to multiple profiles.');
+    }
+    document.profiles[1]!.game_associations[0]!.aliases = ["Halo"];
+    const notNormalized = parseProfileDocument(document);
+    expect(notNormalized.ok).toBe(false);
+    if (!notNormalized.ok) {
+      expect(notNormalized.errors).toEqual(expect.arrayContaining([
+        expect.stringContaining("normalized lowercase text"),
+      ]));
     }
   });
 
@@ -89,7 +175,7 @@ describe("profile schema", () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.profile.name).toBe("Racing");
 
-    document.profiles[0]!.mouse.curve = "unsupported" as never;
+    document.profiles[0]!.mouse.hip.curve = "unsupported" as never;
     expect(parseSelectedProfile(document).ok).toBe(false);
   });
 });

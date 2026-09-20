@@ -1,4 +1,4 @@
-export const PROFILE_SCHEMA_VERSION = 1 as const;
+export const PROFILE_SCHEMA_VERSION = 2 as const;
 export const PROFILE_STORAGE_KEY = "xib.profile_document";
 export const BACKEND_MODE_STORAGE_KEY = "xib.backend_mode";
 export type BackendMode = "auto" | "native" | "browser";
@@ -34,6 +34,9 @@ export const AXIS_TARGETS = [
 export type AxisTarget = (typeof AXIS_TARGETS)[number];
 export type Target = AxisTarget | { button: number };
 export type ResponseCurve = "linear" | "exponential" | "precision";
+export type AdsActivation =
+  | { type: "key"; code: string }
+  | { type: "mouse_button"; button: number };
 
 export interface MouseSettings {
   sensitivity_x: number;
@@ -42,6 +45,20 @@ export interface MouseSettings {
   invert_y: boolean;
   deadzone: number;
   curve: ResponseCurve;
+  smoothing: number;
+  velocity_scale: number;
+}
+
+export interface MouseModes {
+  hip: MouseSettings;
+  ads: MouseSettings;
+  ads_activation: AdsActivation | null;
+}
+
+export interface GameAssociation {
+  title_id: string;
+  title_name: string;
+  aliases: string[];
 }
 
 export interface Profile {
@@ -49,7 +66,8 @@ export interface Profile {
   name: string;
   key_bindings: Record<string, Target[]>;
   mouse_bindings: Record<string, Target[]>;
-  mouse: MouseSettings;
+  mouse: MouseModes;
+  game_associations: GameAssociation[];
 }
 
 export interface ProfileDocument {
@@ -70,28 +88,17 @@ const AXIS_SET = new Set<string>(AXIS_TARGETS);
 const BUTTON_SET = new Set<number>(Object.values(BUTTONS));
 const CURVES = new Set<string>(["linear", "exponential", "precision"]);
 const PROFILE_ID = /^[a-z0-9](?:[a-z0-9_-]{0,38}[a-z0-9])?$/;
+const TITLE_ID = /^[a-z0-9](?:[a-z0-9._:-]{0,78}[a-z0-9])?$/;
 const KEY_CODE = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
 const MAX_PROFILES = 20;
 const MAX_BINDINGS = 128;
+const MAX_GAME_ASSOCIATIONS = 20;
+const MAX_GAME_ALIASES = 10;
 
 export function parseProfileDocument(input: unknown): ValidationResult {
   const errors: string[] = [];
-  let candidate: unknown = input;
-  let migrated = false;
-
-  if (isRecord(input) && !("schema_version" in input) && looksLikeLegacyProfile(input)) {
-    const migratedProfile = {
-      ...input,
-      name: typeof input.id === "string" ? titleFromId(input.id) : "Imported profile",
-      mouse: isRecord(input.mouse) ? { ...input.mouse, curve: "linear" } : input.mouse,
-    };
-    candidate = {
-      schema_version: PROFILE_SCHEMA_VERSION,
-      active_profile_id: input.id,
-      profiles: [migratedProfile],
-    };
-    migrated = true;
-  }
+  const migration = migrateDocument(input);
+  const candidate = migration.value;
 
   if (!isRecord(candidate)) return { ok: false, errors: ["Root must be an object."] };
   exactKeys(candidate, ["schema_version", "active_profile_id", "profiles"], "root", errors);
@@ -119,13 +126,14 @@ export function parseProfileDocument(input: unknown): ValidationResult {
     ) {
       errors.push("active_profile_id must identify a profile.");
     }
+    validateGameConflicts(candidate.profiles, errors);
   }
 
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
     value: structuredClone(candidate) as unknown as ProfileDocument,
-    migrated,
+    migrated: migration.migrated,
   };
 }
 
@@ -158,6 +166,10 @@ export function createStarterProfiles(): ProfileDocument {
   };
 }
 
+export function normalizeGameText(value: string): string {
+  return value.normalize("NFKC").trim().toLocaleLowerCase("en-US").replace(/\s+/g, " ");
+}
+
 export function duplicateBindingWarnings(profile: Profile): string[] {
   const sourcesByTarget = new Map<string, string[]>();
   for (const [source, targets] of Object.entries(profile.key_bindings)) {
@@ -171,13 +183,59 @@ export function duplicateBindingWarnings(profile: Profile): string[] {
     .map(([target, sources]) => `${target} is assigned to ${sources.join(", ")}.`);
 }
 
+function migrateDocument(input: unknown): { value: unknown; migrated: boolean } {
+  let candidate: unknown = input;
+  let migrated = false;
+
+  if (isRecord(candidate) && !("schema_version" in candidate) && looksLikeLegacyProfile(candidate)) {
+    const profile = {
+      ...candidate,
+      name: typeof candidate.id === "string" ? titleFromId(candidate.id) : "Imported profile",
+      mouse: isRecord(candidate.mouse) ? { ...candidate.mouse, curve: "linear" } : candidate.mouse,
+    };
+    candidate = { schema_version: 1, active_profile_id: candidate.id, profiles: [profile] };
+    migrated = true;
+  }
+
+  if (isRecord(candidate) && candidate.schema_version === 1 && Array.isArray(candidate.profiles)) {
+    candidate = {
+      ...candidate,
+      schema_version: PROFILE_SCHEMA_VERSION,
+      profiles: candidate.profiles.map(migrateV1Profile),
+    };
+    migrated = true;
+  }
+  return { value: candidate, migrated };
+}
+
+function migrateV1Profile(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const response = isRecord(value.mouse)
+    ? { ...value.mouse, smoothing: 0, velocity_scale: 0 }
+    : value.mouse;
+  return {
+    ...value,
+    mouse: {
+      hip: isRecord(response) ? { ...response } : response,
+      ads: isRecord(response) ? { ...response } : response,
+      ads_activation: null,
+    },
+    game_associations: [],
+  };
+}
+
 function validateProfile(value: unknown, index: number, errors: string[]): void {
   const path = `profiles[${index}]`;
   if (!isRecord(value)) {
     errors.push(`${path} must be an object.`);
     return;
   }
-  exactKeys(value, ["id", "name", "key_bindings", "mouse_bindings", "mouse"], path, errors);
+  exactKeys(
+    value,
+    ["id", "name", "key_bindings", "mouse_bindings", "mouse", "game_associations"],
+    path,
+    errors,
+  );
   if (typeof value.id !== "string" || !PROFILE_ID.test(value.id)) {
     errors.push(`${path}.id must be 1-40 lowercase letters, numbers, "_" or "-".`);
   }
@@ -190,7 +248,8 @@ function validateProfile(value: unknown, index: number, errors: string[]): void 
   }
   validateBindings(value.key_bindings, `${path}.key_bindings`, false, errors);
   validateBindings(value.mouse_bindings, `${path}.mouse_bindings`, true, errors);
-  validateMouse(value.mouse, `${path}.mouse`, errors);
+  validateMouseModes(value.mouse, value.key_bindings, value.mouse_bindings, `${path}.mouse`, errors);
+  validateGameAssociations(value.game_associations, `${path}.game_associations`, errors);
 }
 
 function validateBindings(
@@ -231,6 +290,23 @@ function validateTarget(value: unknown, path: string, errors: string[]): void {
   errors.push(`${path} is not a supported controller target.`);
 }
 
+function validateMouseModes(
+  value: unknown,
+  keyBindings: unknown,
+  mouseBindings: unknown,
+  path: string,
+  errors: string[],
+): void {
+  if (!isRecord(value)) {
+    errors.push(`${path} must be an object.`);
+    return;
+  }
+  exactKeys(value, ["hip", "ads", "ads_activation"], path, errors);
+  validateMouse(value.hip, `${path}.hip`, errors);
+  validateMouse(value.ads, `${path}.ads`, errors);
+  validateAdsActivation(value.ads_activation, keyBindings, mouseBindings, `${path}.ads_activation`, errors);
+}
+
 function validateMouse(value: unknown, path: string, errors: string[]): void {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object.`);
@@ -238,17 +314,142 @@ function validateMouse(value: unknown, path: string, errors: string[]): void {
   }
   exactKeys(
     value,
-    ["sensitivity_x", "sensitivity_y", "invert_x", "invert_y", "deadzone", "curve"],
+    [
+      "sensitivity_x", "sensitivity_y", "invert_x", "invert_y", "deadzone", "curve",
+      "smoothing", "velocity_scale",
+    ],
     path,
     errors,
   );
   boundedNumber(value.sensitivity_x, 0.001, 0.2, `${path}.sensitivity_x`, errors);
   boundedNumber(value.sensitivity_y, 0.001, 0.2, `${path}.sensitivity_y`, errors);
   boundedNumber(value.deadzone, 0, 0.95, `${path}.deadzone`, errors);
+  boundedNumber(value.smoothing, 0, 0.95, `${path}.smoothing`, errors);
+  boundedNumber(value.velocity_scale, 0, 4, `${path}.velocity_scale`, errors);
   if (typeof value.invert_x !== "boolean") errors.push(`${path}.invert_x must be boolean.`);
   if (typeof value.invert_y !== "boolean") errors.push(`${path}.invert_y must be boolean.`);
   if (typeof value.curve !== "string" || !CURVES.has(value.curve)) {
     errors.push(`${path}.curve is invalid.`);
+  }
+}
+
+function validateAdsActivation(
+  value: unknown,
+  keyBindings: unknown,
+  mouseBindings: unknown,
+  path: string,
+  errors: string[],
+): void {
+  if (value === null) return;
+  if (!isRecord(value) || typeof value.type !== "string") {
+    errors.push(`${path} must be null or an input source.`);
+    return;
+  }
+  if (value.type === "key") {
+    exactKeys(value, ["type", "code"], path, errors);
+    if (typeof value.code !== "string" || !KEY_CODE.test(value.code)) {
+      errors.push(`${path}.code must be a valid KeyboardEvent code.`);
+    } else if (!isRecord(keyBindings) || !Object.hasOwn(keyBindings, value.code)) {
+      errors.push(`${path} must reference an existing keyboard binding.`);
+    }
+    return;
+  }
+  if (value.type === "mouse_button") {
+    exactKeys(value, ["type", "button"], path, errors);
+    if (!Number.isInteger(value.button) || Number(value.button) < 0 || Number(value.button) > 4) {
+      errors.push(`${path}.button must be an integer from 0 to 4.`);
+    } else if (!isRecord(mouseBindings) || !Object.hasOwn(mouseBindings, String(value.button))) {
+      errors.push(`${path} must reference an existing mouse binding.`);
+    }
+    return;
+  }
+  errors.push(`${path}.type is invalid.`);
+}
+
+function validateGameAssociations(value: unknown, path: string, errors: string[]): void {
+  if (!Array.isArray(value)) {
+    errors.push(`${path} must be an array.`);
+    return;
+  }
+  if (value.length > MAX_GAME_ASSOCIATIONS) {
+    errors.push(`${path} exceeds ${MAX_GAME_ASSOCIATIONS} entries.`);
+  }
+  const titleIds = new Set<string>();
+  value.forEach((association, index) => {
+    const itemPath = `${path}[${index}]`;
+    if (!isRecord(association)) {
+      errors.push(`${itemPath} must be an object.`);
+      return;
+    }
+    exactKeys(association, ["title_id", "title_name", "aliases"], itemPath, errors);
+    if (typeof association.title_id !== "string" || !TITLE_ID.test(association.title_id)) {
+      errors.push(`${itemPath}.title_id must be a normalized 1-80 character title id.`);
+    } else if (titleIds.has(association.title_id)) {
+      errors.push(`${path} must not contain duplicate title ids.`);
+    } else {
+      titleIds.add(association.title_id);
+    }
+    validateNormalizedGameName(association.title_name, `${itemPath}.title_name`, errors);
+    if (!Array.isArray(association.aliases)) {
+      errors.push(`${itemPath}.aliases must be an array.`);
+    } else {
+      if (association.aliases.length > MAX_GAME_ALIASES) {
+        errors.push(`${itemPath}.aliases exceeds ${MAX_GAME_ALIASES} entries.`);
+      }
+      association.aliases.forEach((alias, aliasIndex) =>
+        validateNormalizedGameName(alias, `${itemPath}.aliases[${aliasIndex}]`, errors));
+      if (
+        association.aliases.every((alias) => typeof alias === "string") &&
+        new Set(association.aliases).size !== association.aliases.length
+      ) {
+        errors.push(`${itemPath}.aliases must be unique.`);
+      }
+      if (
+        typeof association.title_name === "string" &&
+        association.aliases.includes(association.title_name)
+      ) {
+        errors.push(`${itemPath}.aliases must not repeat title_name.`);
+      }
+    }
+  });
+}
+
+function validateGameConflicts(profiles: unknown[], errors: string[]): void {
+  const owners = new Map<string, string>();
+  profiles.forEach((profile) => {
+    if (!isRecord(profile) || typeof profile.id !== "string" || !Array.isArray(profile.game_associations)) {
+      return;
+    }
+    const profileId = profile.id;
+    profile.game_associations.forEach((association) => {
+      if (!isRecord(association)) return;
+      const values = [
+        typeof association.title_id === "string" ? `id:${association.title_id}` : null,
+        typeof association.title_name === "string" ? `name:${association.title_name}` : null,
+        ...(Array.isArray(association.aliases)
+          ? association.aliases.map((alias) => typeof alias === "string" ? `name:${alias}` : null)
+          : []),
+      ].filter((value): value is string => value !== null);
+      for (const value of values) {
+        const owner = owners.get(value);
+        if (owner && owner !== profileId) {
+          errors.push(`Game association "${value.slice(value.indexOf(":") + 1)}" is assigned to multiple profiles.`);
+        } else {
+          owners.set(value, profileId);
+        }
+      }
+    });
+  });
+}
+
+function validateNormalizedGameName(value: unknown, path: string, errors: string[]): void {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 100 ||
+    value !== normalizeGameText(value)
+  ) {
+    errors.push(`${path} must be normalized lowercase text from 1 to 100 characters.`);
   }
 }
 
@@ -327,6 +528,16 @@ function mouse(
     invert_y: false,
     deadzone,
     curve,
+    smoothing: 0,
+    velocity_scale: 0,
+  };
+}
+
+function mouseModes(response = mouse(), adsActivation: AdsActivation | null = null): MouseModes {
+  return {
+    hip: structuredClone(response),
+    ads: structuredClone(response),
+    ads_activation: adsActivation,
   };
 }
 
@@ -356,7 +567,8 @@ function defaultProfile(): Profile {
       "1": target("right_thumb"),
       "2": ["left_trigger"],
     },
-    mouse: mouse(),
+    mouse: mouseModes(),
+    game_associations: [],
   };
 }
 
@@ -372,7 +584,7 @@ function fpsProfile(): Profile {
       KeyF: target("x"),
       Digit1: target("y"),
     },
-    mouse: mouse(0.024, 0.04, "precision"),
+    mouse: mouseModes(mouse(0.024, 0.04, "precision"), { type: "mouse_button", button: 2 }),
   };
 }
 
@@ -394,6 +606,7 @@ function racingProfile(): Profile {
       "0": target("a"),
       "2": target("b"),
     },
-    mouse: mouse(0.012, 0.08, "exponential"),
+    mouse: mouseModes(mouse(0.012, 0.08, "exponential")),
+    game_associations: [],
   };
 }

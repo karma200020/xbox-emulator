@@ -57,6 +57,62 @@ describe("BrowserGamepadMapper", () => {
       .toEqual([0.36, -0.18]);
     expect(mapper.apply([]).axes.slice(2)).toEqual([0, 0]);
   });
+
+  it("switches between hip and ADS response while the configured source is held", () => {
+    const value = profile();
+    value.mouse.hip.sensitivity_x = 0.01;
+    value.mouse.ads.sensitivity_x = 0.02;
+    value.mouse.ads_activation = { type: "mouse_button", button: 2 };
+    const mapper = new BrowserGamepadMapper(value);
+    expect(mapper.apply([{ kind: "mouse_move", dx: 10, dy: 0 }]).axes[2]).toBeCloseTo(0.1);
+    expect(mapper.apply([
+      { kind: "mouse_button", button: 2, down: true },
+      { kind: "mouse_move", dx: 10, dy: 0 },
+    ]).axes[2]).toBeCloseTo(0.2);
+    expect(mapper.apply([
+      { kind: "mouse_button", button: 2, down: false },
+      { kind: "mouse_move", dx: 10, dy: 0 },
+    ]).axes[2]).toBeCloseTo(0.1);
+  });
+
+  it("applies each response to movement in event order within one batch", () => {
+    const value = profile();
+    value.mouse.hip.sensitivity_x = 0.01;
+    value.mouse.ads.sensitivity_x = 0.02;
+    value.mouse.ads_activation = { type: "mouse_button", button: 2 };
+    const mapper = new BrowserGamepadMapper(value);
+    expect(mapper.apply([
+      { kind: "mouse_move", dx: 10, dy: 0 },
+      { kind: "mouse_button", button: 2, down: true },
+      { kind: "mouse_move", dx: 10, dy: 0 },
+    ]).axes[2]).toBeCloseTo(0.3);
+  });
+
+  it("applies deterministic smoothing and clears it immediately without movement", () => {
+    const value = profile();
+    value.mouse.hip.sensitivity_x = 0.01;
+    value.mouse.hip.smoothing = 0.5;
+    const mapper = new BrowserGamepadMapper(value);
+    expect(mapper.apply([{ kind: "mouse_move", dx: 10, dy: 0 }]).axes[2]).toBeCloseTo(0.1);
+    expect(mapper.apply([{ kind: "mouse_move", dx: 20, dy: 0 }]).axes[2]).toBeCloseTo(0.15);
+    expect(mapper.apply([]).axes[2]).toBe(0);
+    expect(mapper.apply([{ kind: "mouse_move", dx: 20, dy: 0 }]).axes[2]).toBeCloseTo(0.2);
+    expect(mapper.reset().axes).toEqual([0, 0, 0, 0]);
+  });
+
+  it("resets smoothing even when ADS is pressed and released without movement", () => {
+    const value = profile();
+    value.mouse.hip.sensitivity_x = 0.01;
+    value.mouse.hip.smoothing = 0.5;
+    value.mouse.ads_activation = { type: "mouse_button", button: 2 };
+    const mapper = new BrowserGamepadMapper(value);
+    expect(mapper.apply([{ kind: "mouse_move", dx: 10, dy: 0 }]).axes[2]).toBeCloseTo(0.1);
+    expect(mapper.apply([
+      { kind: "mouse_button", button: 2, down: true },
+      { kind: "mouse_button", button: 2, down: false },
+      { kind: "mouse_move", dx: 20, dy: 0 },
+    ]).axes[2]).toBeCloseTo(0.2);
+  });
 });
 
 describe("mouseAxis", () => {
@@ -66,5 +122,11 @@ describe("mouseAxis", () => {
     expect(mouseAxis(25, 0.02, false, 0, "precision")).toBe(0.125);
     expect(mouseAxis(1, 0.02, false, 0.1, "linear")).toBe(0);
     expect(mouseAxis(1000, 0.2, true, 0, "linear")).toBe(-1);
+  });
+
+  it("uses bounded velocity scaling without changing the disabled default", () => {
+    expect(mouseAxis(50, 0.01, false, 0, "linear")).toBe(0.5);
+    expect(mouseAxis(50, 0.01, false, 0, "linear", 1)).toBe(0.75);
+    expect(mouseAxis(100, 0.001, false, 0, "linear", 1)).toBeCloseTo(0.2);
   });
 });

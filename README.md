@@ -31,9 +31,12 @@ The shortcut starts only from your keypress; entering fullscreen alone never
 captures input. Press **Ctrl+Alt+G** again to stop without using Esc.
 
 Click **View / edit mappings** in the extension popup to see keyboard and mouse
-bindings, choose controller targets, and adjust sensitivity. Select a profile,
-edit its bindings, and click **Save changes** to apply them. The same editor is
-also available from the extension's **Options** page.
+bindings, choose controller targets, and tune separate hip and aim-down-sights
+(ADS) mouse response. Profiles can also store optional normalized game names,
+aliases, and title IDs for future selection support. This release does not
+inspect page content or switch profiles automatically. Select a profile, edit
+it, and click **Save changes** to apply it. The same editor is also available
+from the extension's **Options** page.
 The extension stores settings locally and requests no Native Messaging
 permission. See `docs\browser-only-mode.md` for limitations.
 

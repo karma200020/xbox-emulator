@@ -1,5 +1,5 @@
 import { BrowserGamepadMapper, neutralState, type XboxState } from "./browser-gamepad";
-import { parseSelectedProfile } from "./profile-schema";
+import { PROFILE_SCHEMA_VERSION, parseSelectedProfile } from "./profile-schema";
 import { isInputEventsMessage } from "./protocol";
 import { isXboxPlayUrl } from "./xbox-url";
 
@@ -96,7 +96,7 @@ function receiveBridgeMessage(event: MessageEvent<unknown>): void {
 
 function activate(rawProfile: unknown): void {
   const parsed = parseSelectedProfile({
-    schema_version: 1,
+    schema_version: PROFILE_SCHEMA_VERSION,
     active_profile_id: isRecord(rawProfile) ? rawProfile.id : undefined,
     profiles: [rawProfile],
   });
