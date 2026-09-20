@@ -66,6 +66,43 @@ Mouse movement is translated to right-stick values. It therefore remains
 subject to each game's controller deadzone, acceleration, maximum turn speed,
 and aim-assist behavior and cannot match native mouse aiming exactly.
 
+## Onboarding and PC-oriented mapping
+
+The versioned first-run guide is stored only in extension-local storage. It can
+be skipped or restarted and does not listen for gameplay input. It explains
+browser-only scope, lets the user choose a PC-genre starter layout, checks local
+Pointer Lock and storage readiness, introduces sensitivity calibration, and
+links into the mapping editor.
+
+Simple mapping mode is the default. It presents familiar PC actions and friendly
+source labels such as **W**, **Left Shift**, and **Left Mouse**, followed by the
+controller target as explanatory text. Presets provide these action suggestions;
+they are not guarantees of a game's behavior because games decide what each
+standard controller input does. Advanced mode exposes canonical
+`KeyboardEvent.code` values and raw controller targets. Visual capture preserves
+canonical values internally, rejects duplicates and unsupported mouse buttons,
+preserves multi-target bindings, and reserves `Escape` for cancellation and
+capture release.
+
+The controller diagram is an original SVG/CSS rendering rather than a copied
+brand asset. Its focusable controls and adjacent text list expose the same
+mapping information, while calibration reports live right-stick values through
+a polite live region.
+
+## Localization and accessibility
+
+All popup, options, onboarding, activation-prompt, and quick-overlay UI strings
+use bundled MV3 locale catalogs. English is the declared default and fallback;
+Spanish, Brazilian Portuguese, and Hindi are included. Programmatic key codes,
+profile IDs, URL identifiers, and protocol values are not translated.
+
+The extension provides visible keyboard focus, a skip link, native modal focus
+containment during onboarding, labeled controls, status live regions, textual
+state in addition to color, a persistent high-contrast preference, and CSS
+support for `prefers-contrast`, `forced-colors`, and
+`prefers-reduced-motion`. This is an accessibility-focused implementation, not
+a claim of formal WCAG conformance.
+
 ## Profile and response semantics
 
 Profile schema v2 stores separate hip and ADS response settings. ADS is active

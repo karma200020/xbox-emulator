@@ -4,7 +4,6 @@ import {
   MAX_IMPORT_BYTES,
   PROFILE_STORAGE_KEY,
   createStarterProfiles,
-  duplicateBindingWarnings,
   normalizeGameText,
   parseProfileDocument,
   parseProfileJson,
@@ -14,7 +13,6 @@ import {
   type MouseSettings,
   type Target,
 } from "./profile-schema";
-import { searchProfiles } from "./game-profile";
 import {
   DEFAULT_OVERLAY_SHORTCUT,
   OVERLAY_SHORTCUT_STORAGE_KEY,
@@ -32,6 +30,19 @@ import {
   suggestedSensitivity,
   type CalibrationSample,
 } from "./options-math";
+import { controllerParts } from "./controller-visualization";
+import { localizeDocument, t } from "./i18n";
+import { replaceBindingSource, resolveCapture, type CaptureKind } from "./key-capture";
+import { actionLabelKey, friendlyInputLabel, matchesProfileSearch } from "./pc-actions";
+import {
+  ONBOARDING_STORAGE_KEY,
+  activationReady,
+  finishOnboarding,
+  needsOnboarding,
+} from "./onboarding";
+
+const CONTRAST_STORAGE_KEY = "xib.high_contrast";
+localizeDocument();
 
 const elements = {
   status: requireElement<HTMLDivElement>("status"),
@@ -66,6 +77,17 @@ const elements = {
   conflictsCard: requireElement<HTMLElement>("conflicts-card"),
   conflicts: requireElement<HTMLUListElement>("conflicts"),
   importFile: requireElement<HTMLInputElement>("import-file"),
+  controllerDiagram: requireElement<SVGElement>("controller-diagram"),
+  controllerMappings: requireElement<HTMLUListElement>("controller-mappings"),
+  controllerOutput: requireElement<HTMLOutputElement>("controller-output"),
+  controllerStickDot: requireElement<SVGCircleElement>("controller-stick-dot"),
+  contrast: requireElement<HTMLButtonElement>("contrast"),
+  advancedMode: requireElement<HTMLButtonElement>("advanced-mode"),
+  onboarding: requireElement<HTMLDialogElement>("onboarding"),
+  onboardingProgress: requireElement<HTMLDivElement>("onboarding-progress"),
+  onboardingProfile: requireElement<HTMLSelectElement>("onboarding-profile"),
+  onboardingBack: requireElement<HTMLButtonElement>("onboarding-back"),
+  onboardingNext: requireElement<HTMLButtonElement>("onboarding-next"),
 };
 
 let documentState = createStarterProfiles();
@@ -75,6 +97,11 @@ let calibrationSamples: CalibrationSample[] = [];
 let calibrationActive = false;
 let currentSuggestion: number | null = null;
 let overlayShortcut: OverlayShortcutId = DEFAULT_OVERLAY_SHORTCUT;
+let capture: { kind: CaptureKind; oldSource: string | null; button: HTMLButtonElement | null } | null = null;
+let onboardingStep = 0;
+let suppressCapturedMouse = false;
+let onboardingProfileChanged = false;
+let onboardingInitialProfileId = selectedProfileId;
 
 requireElement<HTMLButtonElement>("save").addEventListener("click", () => void save());
 requireElement<HTMLButtonElement>("reset").addEventListener("click", () => void reset());
@@ -85,14 +112,53 @@ requireElement<HTMLButtonElement>("delete-profile").addEventListener("click", de
 requireElement<HTMLButtonElement>("add-key").addEventListener("click", () => addBinding(false));
 requireElement<HTMLButtonElement>("add-mouse").addEventListener("click", () => addBinding(true));
 requireElement<HTMLButtonElement>("add-game").addEventListener("click", addGameAssociation);
+requireElement<HTMLButtonElement>("restart-onboarding").addEventListener("click", () => {
+  void chrome.storage.local.remove(ONBOARDING_STORAGE_KEY).then(() => showOnboarding());
+});
+requireElement<HTMLButtonElement>("onboarding-skip").addEventListener("click", () => void closeOnboarding("skipped"));
+requireElement<HTMLButtonElement>("tour-calibration").addEventListener("click", () => {
+  onboardingStep = 4;
+  elements.onboarding.close();
+  requireElement<HTMLButtonElement>("resume-onboarding").hidden = false;
+  elements.startCalibration.scrollIntoView({ block: "center" });
+  elements.startCalibration.focus();
+  void startCalibration();
+});
+requireElement<HTMLButtonElement>("tour-mappings").addEventListener("click", () => {
+  void closeOnboarding("completed");
+  requireElement<HTMLButtonElement>("add-key").scrollIntoView({ block: "center" });
+  requireElement<HTMLButtonElement>("add-key").focus();
+});
+requireElement<HTMLButtonElement>("resume-onboarding").addEventListener("click", (event) => {
+  stopCalibration(t("stopped"));
+  (event.currentTarget as HTMLButtonElement).hidden = true;
+  showOnboarding(4);
+});
+elements.onboardingBack.addEventListener("click", () => setOnboardingStep(onboardingStep - 1));
+elements.onboardingNext.addEventListener("click", () => {
+  if (onboardingStep === 1) selectOnboardingProfile();
+  if (onboardingStep >= 4) void closeOnboarding("completed");
+  else setOnboardingStep(onboardingStep + 1);
+});
+elements.onboarding.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  void closeOnboarding("skipped");
+});
+elements.contrast.addEventListener("click", () => void setHighContrast(!document.documentElement.classList.contains("high-contrast")));
+elements.advancedMode.addEventListener("click", () => {
+  const enabled = !document.documentElement.classList.contains("advanced");
+  document.documentElement.classList.toggle("advanced", enabled);
+  elements.advancedMode.setAttribute("aria-pressed", String(enabled));
+  elements.advancedMode.textContent = t(enabled ? "simpleMode" : "advancedMode");
+});
 elements.startCalibration.addEventListener("click", () => void startCalibration());
-elements.stopCalibration.addEventListener("click", () => stopCalibration("Stopped"));
+elements.stopCalibration.addEventListener("click", () => stopCalibration(t("stopped")));
 elements.applySuggestion.addEventListener("click", applySuggestion);
 elements.importFile.addEventListener("change", () => void importProfiles());
 elements.responseMode.addEventListener("change", render);
 elements.adsSource.addEventListener("change", updateAdsSource);
 elements.profile.addEventListener("change", () => {
-  stopCalibration("Stopped");
+  stopCalibration(t("stopped"));
   selectedProfileId = elements.profile.value;
   documentState.active_profile_id = selectedProfileId;
   dirty = true;
@@ -119,20 +185,49 @@ for (const input of [
   input.addEventListener("input", updateSettings);
 }
 
+function focusBindingSource(kind: CaptureKind, source: string): void {
+  const container = kind === "mouse" ? elements.mouse : elements.keys;
+  const button = [...container.querySelectorAll<HTMLButtonElement>(".capture-source")]
+    .find((candidate) => candidate.dataset.source === source);
+  button?.focus();
+}
+
 function selectedResponse(): MouseSettings {
   return selectedProfile().mouse[elements.responseMode.value === "ads" ? "ads" : "hip"];
+}
+
+function localizedBindingWarnings(profile: Profile): string[] {
+  const assignments = new Map<string, string[]>();
+  for (const [source, targets] of Object.entries(profile.key_bindings)) {
+    for (const target of targets) {
+      const id = encodeTarget(target);
+      assignments.set(id, [...(assignments.get(id) ?? []), friendlyInputLabel(source, false, t)]);
+    }
+  }
+  for (const [source, targets] of Object.entries(profile.mouse_bindings)) {
+    for (const target of targets) {
+      const id = encodeTarget(target);
+      assignments.set(id, [...(assignments.get(id) ?? []), friendlyInputLabel(source, true, t)]);
+    }
+  }
+  return [...assignments.entries()]
+    .filter(([, sources]) => sources.length > 1)
+    .map(([target, sources]) => t("duplicateTargetWarning", [
+      controllerTargetLabel(decodeTarget(target) ?? target as Target),
+      sources.join(", "),
+    ]));
 }
 
 function renderAdsSources(profile: Profile): void {
   const selected = encodeAdsSource(profile.mouse.ads_activation);
   const sources: [string, string][] = [
-    ["", "None"],
+    ["", t("none")],
     ...Object.keys(profile.key_bindings)
       .sort()
-      .map((code): [string, string] => [`key:${code}`, `Keyboard: ${code}`]),
+      .map((code): [string, string] => [`key:${code}`, t("keyboardSource", code)]),
     ...Object.keys(profile.mouse_bindings)
       .sort()
-      .map((button): [string, string] => [`mouse:${button}`, `Mouse button ${button}`]),
+      .map((button): [string, string] => [`mouse:${button}`, t("mouseSource", button)]),
   ];
   elements.adsSource.replaceChildren(
     ...sources.map(([value, label]) => option(value, label, value === selected)),
@@ -167,7 +262,7 @@ function clearAdsSourceIfRemoved(source: string, isMouse: boolean): void {
 function addGameAssociation(): void {
   const associations = selectedProfile().game_associations;
   if (associations.length >= 20) {
-    setStatus("A maximum of 20 game associations is supported.", true);
+    setStatus(t("maxGames"), true);
     return;
   }
   let suffix = associations.length + 1;
@@ -180,8 +275,8 @@ function renderGameAssociations(profile: Profile): void {
   elements.games.replaceChildren(...profile.game_associations.map((association, index) => {
     const row = document.createElement("div");
     row.className = "game-row";
-    const titleId = gameInput("Title ID", association.title_id);
-    const titleName = gameInput("Normalized title name", association.title_name);
+    const titleId = gameInput(t("titleId"), association.title_id, 80);
+    const titleName = gameInput(t("normalizedTitle"), association.title_name, 1000);
     const aliases = gameAliasesInput(association.aliases);
     titleId.addEventListener("input", markPendingEdit);
     titleName.addEventListener("input", markPendingEdit);
@@ -204,7 +299,7 @@ function renderGameAssociations(profile: Profile): void {
     remove.type = "button";
     remove.className = "danger";
     remove.textContent = "×";
-    remove.setAttribute("aria-label", `Remove game association ${index + 1}`);
+    remove.setAttribute("aria-label", t("removeGame", String(index + 1)));
     remove.addEventListener("click", () => {
       profile.game_associations.splice(index, 1);
       changed(true);
@@ -214,10 +309,10 @@ function renderGameAssociations(profile: Profile): void {
   }));
 }
 
-function gameInput(label: string, value: string): HTMLInputElement {
+function gameInput(label: string, value: string, maxLength: number): HTMLInputElement {
   const input = document.createElement("input");
   input.value = value;
-  input.maxLength = label === "Title ID" ? 80 : 1000;
+  input.maxLength = maxLength;
   input.setAttribute("aria-label", label);
   return input;
 }
@@ -227,28 +322,34 @@ function gameAliasesInput(values: readonly string[]): HTMLTextAreaElement {
   input.value = values.join("\n");
   input.maxLength = 1000;
   input.rows = 3;
-  input.placeholder = "One normalized alias per line";
-  input.setAttribute("aria-label", "Normalized aliases, one per line");
+  input.placeholder = t("aliasesPlaceholder");
+  input.setAttribute("aria-label", t("aliasesLabel"));
   return input;
 }
 
 function markPendingEdit(): void {
   dirty = true;
-  setStatus("Unsaved changes.");
+  setStatus(t("unsavedChanges"));
 }
 
 window.addEventListener("beforeunload", (event) => {
-  stopCalibration("Stopped");
+  stopCalibration(t("stopped"));
   if (dirty) event.preventDefault();
 });
-window.addEventListener("pagehide", () => stopCalibration("Stopped"));
-window.addEventListener("blur", () => stopCalibration("Stopped (window lost focus)"));
+window.addEventListener("pagehide", () => stopCalibration(t("stopped")));
+window.addEventListener("blur", () => stopCalibration(t("windowLostFocus")));
 document.addEventListener("pointerlockchange", () => {
   if (calibrationActive && document.pointerLockElement !== elements.calibrationSurface) {
-    stopCalibration("Stopped (pointer lock lost)");
+    stopCalibration(t("pointerLost"));
   }
 });
 window.addEventListener("mousemove", onCalibrationMove);
+window.addEventListener("keydown", onSourceKey, true);
+window.addEventListener("mousedown", onSourceMouse, true);
+window.addEventListener("mouseup", suppressCapturedMouseEvent, true);
+window.addEventListener("click", suppressCapturedMouseEvent, true);
+window.addEventListener("auxclick", suppressCapturedMouseEvent, true);
+window.addEventListener("contextmenu", suppressCapturedMouseEvent, true);
 
 void load();
 
@@ -257,16 +358,19 @@ async function load(): Promise<void> {
     const stored = await chrome.storage.local.get([
       PROFILE_STORAGE_KEY,
       OVERLAY_SHORTCUT_STORAGE_KEY,
+      ONBOARDING_STORAGE_KEY,
+      CONTRAST_STORAGE_KEY,
     ]);
+    applyHighContrast(stored[CONTRAST_STORAGE_KEY] === true);
     overlayShortcut = parseOverlayShortcut(stored[OVERLAY_SHORTCUT_STORAGE_KEY]);
     const raw = stored[PROFILE_STORAGE_KEY] as unknown;
     if (raw === undefined) {
       await persist(documentState);
-      setStatus("Starter profiles created.");
+      setStatus(t("starterProfilesCreated"));
     } else {
       const result = parseProfileDocument(raw);
       if (!result.ok) {
-        setStatus(`Stored profiles are invalid: ${result.errors.join(" ")}`, true);
+        setStatus(t("storedProfilesInvalid"), true);
         render();
         return;
       }
@@ -274,13 +378,14 @@ async function load(): Promise<void> {
       selectedProfileId = documentState.active_profile_id;
       if (result.migrated) {
         await persist(documentState);
-        setStatus("Profile upgraded to the current schema.");
+        setStatus(t("profileUpgraded"));
       }
     }
     dirty = false;
     render();
+    if (needsOnboarding(stored[ONBOARDING_STORAGE_KEY])) showOnboarding();
   } catch {
-    setStatus("Could not read local profile storage.", true);
+    setStatus(t("readStorageFailed"), true);
     render();
   }
 }
@@ -308,16 +413,18 @@ function render(): void {
   renderCurvePreview();
   renderBindings(elements.keys, profile.key_bindings, false);
   renderBindings(elements.mouse, profile.mouse_bindings, true);
+  renderController(profile);
   renderConflicts(profile);
   requireElement<HTMLButtonElement>("delete-profile").disabled = documentState.profiles.length === 1;
 }
 
 function renderProfileList(): void {
-  const visible = searchProfiles(documentState.profiles, elements.profileSearch.value);
+  const visible = documentState.profiles.filter((profile) =>
+    matchesProfileSearch(profile, elements.profileSearch.value, starterProfileLabel(profile)));
   const selected = selectedProfile();
   if (!visible.some(({ id }) => id === selected.id)) visible.unshift(selected);
   elements.profile.replaceChildren(
-    ...visible.map((item) => option(item.id, item.name, item.id === selected.id)),
+    ...visible.map((item) => option(item.id, starterProfileLabel(item), item.id === selected.id)),
   );
 }
 
@@ -332,19 +439,37 @@ function renderBindings(
       const row = document.createElement("div");
       row.className = "binding-row";
 
-      const sourceInput = document.createElement("input");
-      sourceInput.value = source;
-      sourceInput.setAttribute("aria-label", isMouse ? "Mouse button" : "Keyboard code");
-      sourceInput.inputMode = isMouse ? "numeric" : "text";
-      sourceInput.addEventListener("change", () => renameBinding(bindings, source, sourceInput.value, isMouse));
+      const action = document.createElement("div");
+      const actionNames = targets.map((target) => t(actionLabelKey(selectedProfile(), target)));
+      const targetNames = targets.map(controllerTargetLabel);
+      const actionTitle = document.createElement("strong");
+      actionTitle.className = "action-name";
+      actionTitle.textContent = [...new Set(actionNames)].join(" / ");
+      const explanation = document.createElement("span");
+      explanation.className = "controller-explanation";
+      explanation.textContent = `${[...new Set(actionNames)].join(" / ")} → ${targetNames.join(" + ")}`;
+      action.append(actionTitle, explanation);
+
+      const sourceInput = document.createElement("button");
+      sourceInput.type = "button";
+      sourceInput.className = "secondary capture-source";
+      sourceInput.textContent = friendlyInputLabel(source, isMouse, t);
+      sourceInput.dataset.source = source;
+      sourceInput.dataset.captureKind = isMouse ? "mouse" : "keyboard";
+      const rawSource = document.createElement("span");
+      rawSource.className = "advanced-code";
+      rawSource.textContent = source;
+      sourceInput.append(rawSource);
+      sourceInput.setAttribute("aria-label", t(isMouse ? "changeMouse" : "changeKey", source));
+      sourceInput.addEventListener("click", () => startSourceCapture(isMouse ? "mouse" : "keyboard", source, sourceInput));
 
       const targetList = document.createElement("div");
-      targetList.className = "target-list";
+      targetList.className = "target-list advanced-only";
       targets.forEach((target, targetIndex) => {
         const targetRow = document.createElement("div");
         targetRow.className = "target-row";
         const select = document.createElement("select");
-        select.setAttribute("aria-label", `Controller target ${targetIndex + 1} for ${source}`);
+        select.setAttribute("aria-label", t("controllerTarget", [String(targetIndex + 1), source]));
         for (const [value, label] of targetOptions()) {
           select.append(option(value, label, value === encodeTarget(target)));
         }
@@ -360,7 +485,7 @@ function renderBindings(
         removeTargetButton.className = "danger";
         removeTargetButton.textContent = "−";
         removeTargetButton.disabled = targets.length === 1;
-        removeTargetButton.setAttribute("aria-label", `Remove target ${targetIndex + 1} from ${source}`);
+        removeTargetButton.setAttribute("aria-label", t("removeTarget", [String(targetIndex + 1), source]));
         removeTargetButton.addEventListener("click", () => {
           bindings[source] = removeTarget(targets, targetIndex);
           changed(true);
@@ -371,9 +496,9 @@ function renderBindings(
       const addTargetButton = document.createElement("button");
       addTargetButton.type = "button";
       addTargetButton.className = "secondary add-target";
-      addTargetButton.textContent = "Add target";
+      addTargetButton.textContent = t("addTarget", source);
       addTargetButton.disabled = targets.length >= 4 || nextAvailableTarget(targets) === null;
-      addTargetButton.setAttribute("aria-label", `Add controller target to ${source}`);
+      addTargetButton.setAttribute("aria-label", t("addTarget", source));
       addTargetButton.addEventListener("click", () => {
         const target = nextAvailableTarget(targets);
         if (target) {
@@ -387,16 +512,114 @@ function renderBindings(
       remove.type = "button";
       remove.className = "danger";
       remove.textContent = "×";
-      remove.setAttribute("aria-label", `Remove ${source} binding`);
+      remove.setAttribute("aria-label", t("removeBinding", source));
       remove.addEventListener("click", () => {
         delete bindings[source];
         clearAdsSourceIfRemoved(source, isMouse);
         changed(true);
       });
-      row.append(sourceInput, targetList, remove);
+      row.append(action, sourceInput, targetList, remove);
       return row;
     });
   container.replaceChildren(...rows);
+}
+
+function startSourceCapture(
+  kind: CaptureKind,
+  oldSource: string | null,
+  button: HTMLButtonElement | null = null,
+): void {
+  cancelSourceCapture(false);
+  capture = { kind, oldSource, button };
+  if (button) {
+    button.classList.add("capturing");
+    button.textContent = t(kind === "keyboard" ? "pressKey" : "pressMouse");
+  }
+  setStatus(t(kind === "keyboard" ? "pressKey" : "pressMouse"));
+}
+
+function onSourceKey(event: KeyboardEvent): void {
+  if (!capture) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const result = resolveCapture(
+    capture.kind,
+    { code: event.code },
+    Object.keys(capture.kind === "mouse" ? selectedProfile().mouse_bindings : selectedProfile().key_bindings),
+    capture.oldSource,
+  );
+  applyCaptureResult(result);
+}
+
+function suppressCapturedMouseEvent(event: Event): void {
+  if (!suppressCapturedMouse) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
+function onSourceMouse(event: MouseEvent): void {
+  if (!capture || capture.kind !== "mouse") return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const result = resolveCapture(
+    "mouse",
+    { button: event.button },
+    Object.keys(selectedProfile().mouse_bindings),
+    capture.oldSource,
+  );
+  suppressCapturedMouse = true;
+  window.setTimeout(() => {
+    suppressCapturedMouse = false;
+  }, 250);
+  applyCaptureResult(result);
+}
+
+function applyCaptureResult(result: ReturnType<typeof resolveCapture>): void {
+  if (!capture) return;
+  if (result.status === "cancelled") {
+    cancelSourceCapture();
+    return;
+  }
+  if (result.status === "duplicate") {
+    setStatus(t("duplicateSource", result.source), true);
+    return;
+  }
+  if (result.status === "invalid") {
+    if (capture.kind === "keyboard") setStatus(t("invalidSource"), true);
+    return;
+  }
+  const { kind, oldSource } = capture;
+  if (oldSource === result.source) {
+    capture.button?.classList.remove("capturing");
+    capture.button!.textContent = friendlyInputLabel(result.source, kind === "mouse", t);
+    capture = null;
+    setStatus(t("bindingUnchanged"));
+    return;
+  }
+  capture = null;
+  const bindings = kind === "mouse"
+    ? selectedProfile().mouse_bindings
+    : selectedProfile().key_bindings;
+  if (oldSource === null) {
+    bindings[result.source] = [{ button: BUTTONS.a }];
+    changed(true);
+    setStatus(t("bindingAdded", result.source));
+  } else {
+    renameBinding(bindings, oldSource, result.source, kind === "mouse");
+    setStatus(t("bindingChanged", [oldSource, result.source]));
+  }
+  focusBindingSource(kind, result.source);
+}
+
+function cancelSourceCapture(announce = true): void {
+  if (!capture) return;
+  const { kind, oldSource } = capture;
+  capture.button?.classList.remove("capturing");
+  capture = null;
+  render();
+  if (oldSource) focusBindingSource(kind, oldSource);
+  else requireElement<HTMLButtonElement>(kind === "mouse" ? "add-mouse" : "add-key").focus();
+  if (announce) setStatus(t("captureCancelled"));
 }
 
 function updateSettings(): void {
@@ -429,17 +652,16 @@ function renameBinding(
 ): void {
   if (newSource === oldSource) return;
   if (!(isMouse ? /^(?:0|1|2|3|4)$/.test(newSource) : /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(newSource))) {
-    setStatus(isMouse ? "Mouse button must be 0–4." : "Enter a valid KeyboardEvent code.", true);
+    setStatus(t("invalidSource"), true);
     render();
     return;
   }
   if (newSource in bindings) {
-    setStatus(`${newSource} already has a binding.`, true);
+    setStatus(t("duplicateSource", newSource), true);
     render();
     return;
   }
-  bindings[newSource] = bindings[oldSource]!;
-  delete bindings[oldSource];
+  replaceBindingSource(bindings, oldSource, newSource);
   const activation = selectedProfile().mouse.ads_activation;
   if (activation?.type === "key" && !isMouse && activation.code === oldSource) {
     activation.code = newSource;
@@ -451,28 +673,23 @@ function renameBinding(
 
 function addBinding(isMouse: boolean): void {
   const bindings = isMouse ? selectedProfile().mouse_bindings : selectedProfile().key_bindings;
-  const candidates = isMouse
-    ? ["0", "1", "2", "3", "4"]
-    : Array.from({ length: 26 }, (_, index) => `Key${String.fromCharCode(65 + index)}`);
-  const source = candidates.find((candidate) => !(candidate in bindings));
-  if (!source) {
-    setStatus(isMouse ? "All supported mouse buttons are assigned." : "Rename an existing key before adding another.", true);
+  if (isMouse && Object.keys(bindings).length >= 5) {
+    setStatus(t("allMouseAssigned"), true);
     return;
   }
-  bindings[source] = [{ button: BUTTONS.a }];
-  changed(true);
+  startSourceCapture(isMouse ? "mouse" : "keyboard", null);
 }
 
 function duplicateProfile(): void {
   if (documentState.profiles.length >= 20) {
-    setStatus("A maximum of 20 profiles is supported.", true);
+    setStatus(t("maxProfiles"), true);
     return;
   }
   const source = selectedProfile();
   const id = uniqueId(`${source.id}-copy`);
   const copy = structuredClone(source);
   copy.id = id;
-  copy.name = `${source.name} copy`.slice(0, 60);
+  copy.name = `${source.name} ${t("copySuffix")}`.slice(0, 60);
   documentState.profiles.push(copy);
   selectedProfileId = id;
   documentState.active_profile_id = id;
@@ -491,32 +708,32 @@ function deleteProfile(): void {
 async function save(): Promise<void> {
   const result = parseProfileDocument(documentState);
   if (!result.ok) {
-    setStatus(`Not saved: ${result.errors.join(" ")}`, true);
+    setStatus(t("notSaved"), true);
     return;
   }
   try {
     await persist(result.value);
     documentState = result.value;
     dirty = false;
-    setStatus("Profiles saved locally.");
+    setStatus(t("profilesSaved"));
     render();
   } catch {
-    setStatus("Save failed. Existing profiles were not changed.", true);
+    setStatus(t("saveFailed"), true);
   }
 }
 
 async function reset(): Promise<void> {
-  if (!window.confirm("Replace every local profile with the bundled generic presets?")) return;
+  if (!window.confirm(t("resetConfirm"))) return;
   const replacement = createStarterProfiles();
   try {
     await persist(replacement);
     documentState = replacement;
     selectedProfileId = replacement.active_profile_id;
     dirty = false;
-    setStatus("Starter profiles restored.");
+    setStatus(t("startersRestored"));
     render();
   } catch {
-    setStatus("Reset failed. Existing profiles were not changed.", true);
+    setStatus(t("resetFailed"), true);
   }
 }
 
@@ -525,29 +742,29 @@ async function importProfiles(): Promise<void> {
   elements.importFile.value = "";
   if (!file) return;
   if (file.size > MAX_IMPORT_BYTES) {
-    setStatus(`Import exceeds ${MAX_IMPORT_BYTES} bytes.`, true);
+    setStatus(t("importTooLarge"), true);
     return;
   }
   try {
     const result = parseProfileJson(await file.text());
     if (!result.ok) {
-      setStatus(`Import rejected: ${result.errors.join(" ")}`, true);
+      setStatus(t("importRejected"), true);
       return;
     }
     documentState = result.value;
     selectedProfileId = result.value.active_profile_id;
     dirty = true;
-    setStatus(result.migrated ? "Legacy profile imported. Review and save it." : "Profiles imported. Review and save them.");
+    setStatus(t(result.migrated ? "legacyImported" : "profilesImported"));
     render();
   } catch {
-    setStatus("Could not read the selected file.", true);
+    setStatus(t("readFileFailed"), true);
   }
 }
 
 function exportProfiles(): void {
   const result = parseProfileDocument(documentState);
   if (!result.ok) {
-    setStatus(`Export blocked: ${result.errors.join(" ")}`, true);
+    setStatus(t("exportBlocked"), true);
     return;
   }
   const blob = new Blob([`${JSON.stringify(result.value, null, 2)}\n`], { type: "application/json" });
@@ -557,7 +774,7 @@ function exportProfiles(): void {
   anchor.download = "xbox-input-bridge-profiles.json";
   anchor.click();
   URL.revokeObjectURL(url);
-  setStatus("Validated profiles exported.");
+  setStatus(t("profilesExported"));
 }
 
 async function persist(value: ProfileDocument): Promise<void> {
@@ -571,17 +788,17 @@ async function persist(value: ProfileDocument): Promise<void> {
 
 function changed(rerender = false): void {
   dirty = true;
-  setStatus("Unsaved changes.");
+  setStatus(t("unsavedChanges"));
   if (rerender) render();
   else renderConflicts(selectedProfile());
 }
 
 function renderConflicts(profile: Profile): void {
   const validation = parseProfileDocument(documentState);
-  const gameWarnings = validation.ok
-    ? []
-    : validation.errors.filter((error) => error.startsWith("Game association "));
-  const warnings = [...duplicateBindingWarnings(profile), ...gameWarnings];
+  const warnings = localizedBindingWarnings(profile);
+  if (!validation.ok && validation.errors.some((error) => error.startsWith("Game association "))) {
+    warnings.push(t("gameAssociationInvalid"));
+  }
   elements.conflicts.replaceChildren(...warnings.map((warning) => {
     const item = document.createElement("li");
     item.textContent = warning;
@@ -611,17 +828,17 @@ async function startCalibration(): Promise<void> {
   try {
     await elements.calibrationSurface.requestPointerLock();
     if (document.pointerLockElement !== elements.calibrationSurface) {
-      stopCalibration("Stopped (pointer lock unavailable)");
+      stopCalibration(t("pointerUnavailable"));
       return;
     }
     calibrationActive = true;
     elements.startCalibration.disabled = true;
     elements.stopCalibration.disabled = false;
     elements.calibrationSurface.classList.add("capturing");
-    elements.calibrationState.textContent = "Capturing — move the pointer; press Stop or Escape to finish";
+    elements.calibrationState.textContent = t("calibrationCapturing");
     renderCalibration({ dx: 0, dy: 0 });
   } catch {
-    stopCalibration("Stopped (pointer lock denied)");
+    stopCalibration(t("pointerDenied"));
   }
 }
 
@@ -652,9 +869,21 @@ function stopCalibration(label: string): void {
 function renderCalibration(sample: CalibrationSample): void {
   const stick = normalizedStick(sample, selectedResponse());
   elements.calibrationValues.value =
-    `Raw Δ ${sample.dx}, ${sample.dy} · Stick ${stick.dx.toFixed(3)}, ${stick.dy.toFixed(3)} · ${calibrationSamples.length} samples`;
+    t("calibrationValues", [
+      String(sample.dx),
+      String(sample.dy),
+      stick.dx.toFixed(3),
+      stick.dy.toFixed(3),
+      String(calibrationSamples.length),
+    ]);
   elements.stickDot.style.left = `${50 + stick.dx * 46}%`;
   elements.stickDot.style.top = `${50 - stick.dy * 46}%`;
+  elements.controllerStickDot.setAttribute("cx", String(424 + stick.dx * 27));
+  elements.controllerStickDot.setAttribute("cy", String(275 - stick.dy * 27));
+  elements.controllerOutput.value = t("rightStickOutput", [
+    stick.dx.toFixed(3),
+    stick.dy.toFixed(3),
+  ]);
 }
 
 function renderSuggestion(): void {
@@ -667,7 +896,138 @@ function applySuggestion(): void {
   elements.sensitivityX.value = String(currentSuggestion);
   elements.sensitivityY.value = String(currentSuggestion);
   updateSettings();
-  setStatus("Suggested sensitivity applied. Save to keep it.");
+  setStatus(t("suggestionApplied"));
+}
+
+function renderController(profile: Profile): void {
+  const parts = controllerParts(profile);
+  const byTarget = new Map(parts.map((part) => [part.target, part]));
+  for (const control of elements.controllerDiagram.querySelectorAll<SVGGElement>("[data-target]")) {
+    const target = control.dataset.target;
+    const part = target ? byTarget.get(target) : undefined;
+    const label = target ? controllerTargetLabel(decodeTarget(target) ?? target as Target) : "";
+    const action = part && target
+      ? t(actionLabelKey(profile, decodeTarget(target) ?? target as Target))
+      : "";
+    const description = part?.mapped
+      ? t("mappedControl", [`${action} — ${label}`, part.sources.map((source) =>
+          friendlyInputLabel(source.replace("Mouse ", ""), source.startsWith("Mouse "), t)).join(", ")])
+      : t("unmappedControl", label);
+    control.classList.toggle("mapped", part?.mapped === true);
+    control.setAttribute("role", "img");
+    control.setAttribute("aria-label", description);
+  }
+  elements.controllerMappings.replaceChildren(
+    ...parts.filter(({ mapped }) => mapped).map((part) => {
+      const item = document.createElement("li");
+      item.textContent = t("mappedControl", [
+        `${t(actionLabelKey(profile, decodeTarget(part.target) ?? part.target as Target))} — ${
+          controllerTargetLabel(decodeTarget(part.target) ?? part.target as Target)
+        }`,
+        part.sources.map((source) =>
+          friendlyInputLabel(source.replace("Mouse ", ""), source.startsWith("Mouse "), t)).join(", "),
+      ]);
+      return item;
+    }),
+  );
+}
+
+function showOnboarding(step = 0): void {
+  onboardingStep = step;
+  if (step === 0) {
+    onboardingProfileChanged = false;
+    onboardingInitialProfileId = selectedProfileId;
+    requireElement<HTMLButtonElement>("resume-onboarding").hidden = true;
+  }
+  elements.onboardingProfile.replaceChildren(
+    ...documentState.profiles.map((profile) =>
+      option(profile.id, starterProfileLabel(profile), profile.id === selectedProfileId)),
+  );
+  renderReadiness();
+  if (!elements.onboarding.open) elements.onboarding.showModal();
+  setOnboardingStep(step);
+}
+
+function setOnboardingStep(step: number): void {
+  onboardingStep = Math.max(0, Math.min(4, step));
+  for (const section of elements.onboarding.querySelectorAll<HTMLElement>(".onboarding-step")) {
+    section.hidden = Number(section.dataset.step) !== onboardingStep;
+  }
+  elements.onboardingProgress.textContent = t("tourProgress", [String(onboardingStep + 1), "5"]);
+  elements.onboardingBack.disabled = onboardingStep === 0;
+  elements.onboardingNext.textContent = t(onboardingStep === 4 ? "finish" : "next");
+  if (onboardingStep === 2) renderReadiness();
+  const heading = elements.onboarding.querySelector<HTMLElement>(".onboarding-step:not([hidden]) h2");
+  if (heading) {
+    heading.tabIndex = -1;
+    heading.focus();
+  }
+}
+
+function selectOnboardingProfile(): void {
+  if (!documentState.profiles.some(({ id }) => id === elements.onboardingProfile.value)) return;
+  onboardingProfileChanged = elements.onboardingProfile.value !== onboardingInitialProfileId;
+  selectedProfileId = elements.onboardingProfile.value;
+  documentState.active_profile_id = selectedProfileId;
+  render();
+}
+
+async function closeOnboarding(outcome: "completed" | "skipped"): Promise<void> {
+  elements.onboarding.close();
+  try {
+    await persistOnboarding(outcome);
+  } catch {
+    setStatus(t("saveFailed"), true);
+  }
+}
+
+async function persistOnboarding(outcome: "completed" | "skipped"): Promise<void> {
+  const stored = await chrome.storage.local.get(PROFILE_STORAGE_KEY);
+  const storedProfiles = parseProfileDocument(stored[PROFILE_STORAGE_KEY]);
+  const values: Record<string, unknown> = {
+    [ONBOARDING_STORAGE_KEY]: finishOnboarding(outcome),
+  };
+  if (
+    onboardingProfileChanged &&
+    storedProfiles.ok &&
+    storedProfiles.value.profiles.some(({ id }) => id === selectedProfileId)
+  ) {
+    storedProfiles.value.active_profile_id = selectedProfileId;
+    values[PROFILE_STORAGE_KEY] = storedProfiles.value;
+  }
+  await chrome.storage.local.set(values);
+  onboardingProfileChanged = false;
+}
+
+function renderReadiness(): void {
+  const checks = [
+    [t("readinessPointerLock"), typeof elements.calibrationSurface.requestPointerLock === "function"],
+    [t("readinessStorage"), Boolean(chrome.storage?.local)],
+    [t("readinessProfile"), documentState.profiles.some(({ id }) => id === selectedProfileId)],
+  ] as const;
+  const readiness = activationReady({
+    pointerLock: checks[0][1],
+    localStorage: checks[1][1],
+    starterProfile: checks[2][1],
+  });
+  elements.onboardingNext.disabled = onboardingStep === 2 && !readiness;
+  requireElement<HTMLUListElement>("readiness-list").replaceChildren(...checks.map(([label, ready]) => {
+    const item = document.createElement("li");
+    item.className = ready ? "ready" : "not-ready";
+    item.textContent = `${ready ? "✓" : "!"} ${label}: ${t(ready ? "ready" : "notReady")}`;
+    return item;
+  }));
+}
+
+async function setHighContrast(enabled: boolean): Promise<void> {
+  applyHighContrast(enabled);
+  await chrome.storage.local.set({ [CONTRAST_STORAGE_KEY]: enabled });
+}
+
+function applyHighContrast(enabled: boolean): void {
+  document.documentElement.classList.toggle("high-contrast", enabled);
+  elements.contrast.setAttribute("aria-pressed", String(enabled));
+  elements.contrast.textContent = t(enabled ? "useStandardContrast" : "highContrast");
 }
 
 function selectedProfile(): Profile {
@@ -691,13 +1051,52 @@ function uniqueId(base: string): string {
 
 function targetOptions(): [string, string][] {
   return [
-    ...AXIS_TARGETS.map((target): [string, string] => [target, labelTarget(target)]),
-    ...Object.entries(BUTTONS).map(([name, code]): [string, string] => [`button:${code}`, `Button ${labelTarget(name)}`]),
+    ...AXIS_TARGETS.map((target): [string, string] => [target, controllerTargetLabel(target)]),
+    ...Object.values(BUTTONS).map((code): [string, string] => [`button:${code}`, controllerTargetLabel({ button: code })]),
   ];
 }
 
 function labelTarget(value: string): string {
   return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function controllerTargetLabel(target: Target): string {
+  if (typeof target === "string") {
+    const labels: Record<string, string> = {
+      left_x_negative: t("leftStickLeft"),
+      left_x_positive: t("leftStickRight"),
+      left_y_negative: t("leftStickBack"),
+      left_y_positive: t("leftStickForward"),
+      left_trigger: t("leftTrigger"),
+      right_trigger: t("rightTrigger"),
+    };
+    return labels[target] ?? labelTarget(target);
+  }
+  const name = Object.entries(BUTTONS).find(([, value]) => value === target.button)?.[0];
+  const labels: Record<string, string> = {
+    a: t("aButton"), b: t("bButton"), x: t("xButton"), y: t("yButton"),
+    left_thumb: t("leftStickClick"), right_thumb: t("rightStickClick"),
+    left_shoulder: t("leftBumper"), right_shoulder: t("rightBumper"),
+    start: t("menuButton"), back: t("viewButton"), guide: t("guideButton"),
+    dpad_up: t("dpadUp"), dpad_down: t("dpadDown"),
+    dpad_left: t("dpadLeft"), dpad_right: t("dpadRight"),
+  };
+  return name ? labels[name] ?? labelTarget(name) : String(target.button);
+}
+
+function starterProfileLabel(profile: Profile): string {
+  const starterNames: Record<string, string> = {
+    default: "Default",
+    fps: "FPS",
+    racing: "Racing",
+    action: "Third-person / Action",
+    platformer: "Platformer",
+    "one-handed": "Accessibility: One-handed",
+  };
+  if (starterNames[profile.id] !== profile.name) return profile.name;
+  const key = `starter_${profile.id.replace("-", "_")}`;
+  const translated = t(key);
+  return translated === key ? profile.name : translated;
 }
 
 function encodeTarget(target: Target): string {

@@ -3,6 +3,7 @@ import {
   type OverlayProfileSummary,
   type RuntimeMessage,
 } from "./protocol";
+import { t } from "./i18n";
 
 type OverlayState = Extract<RuntimeMessage, { type: "overlay_state" }>;
 
@@ -24,6 +25,7 @@ export class QuickOverlay {
   private matchText: HTMLElement | null = null;
   private statusText: HTMLElement | null = null;
   private requestGeneration = 0;
+  private previousFocus: HTMLElement | null = null;
   private fields: Record<"hip_x" | "hip_y" | "ads_x" | "ads_y", HTMLInputElement> | null = null;
 
   constructor(
@@ -37,13 +39,17 @@ export class QuickOverlay {
 
   async show(parent: Element, initialState?: OverlayState, focus = true): Promise<void> {
     const generation = ++this.requestGeneration;
+    this.previousFocus = this.document.activeElement instanceof HTMLElement
+      ? this.document.activeElement
+      : null;
     this.ensurePanel();
+    this.panel!.setAttribute("aria-modal", String(focus));
     if (this.panel!.parentElement !== parent) parent.append(this.panel!);
     if (!this.panel!.matches(":popover-open")) this.panel!.showPopover();
     const state = initialState ?? await this.client.getState();
     if (!this.panel || generation !== this.requestGeneration) return;
     if (state) this.render(state);
-    else this.setStatus("Profile state is unavailable.", true);
+    else this.setStatus(t("profileUnavailable"), true);
     if (focus) this.profileSelect?.focus();
   }
 
@@ -60,6 +66,8 @@ export class QuickOverlay {
     this.captureText = null;
     this.matchText = null;
     this.statusText = null;
+    this.previousFocus?.focus();
+    this.previousFocus = null;
   }
 
   async refresh(state?: OverlayState): Promise<void> {
@@ -74,7 +82,8 @@ export class QuickOverlay {
     const panel = this.document.createElement("div");
     panel.popover = "manual";
     panel.setAttribute("role", "dialog");
-    panel.setAttribute("aria-label", "Xbox Input Bridge quick settings");
+    panel.setAttribute("aria-label", t("quickSettingsLabel"));
+    panel.setAttribute("aria-modal", "false");
     Object.assign(panel.style, {
       position: "fixed",
       zIndex: "2147483647",
@@ -94,13 +103,13 @@ export class QuickOverlay {
       font: "14px/1.45 system-ui, sans-serif",
     });
 
-    const heading = this.text("h2", "Xbox Input Bridge");
+    const heading = this.text("h2", t("extensionName"));
     Object.assign(heading.style, { margin: "0 0 12px", fontSize: "20px" });
-    this.gameText = this.text("p", "Detected game: Unknown");
-    this.captureText = this.text("p", "Capture: Inactive");
+    this.gameText = this.text("p", t("detectedGame", t("unknown")));
+    this.captureText = this.text("p", t("captureLabel", t("inactive")));
     this.matchText = this.text("p", "");
 
-    const profileLabel = this.label("Profile");
+    const profileLabel = this.label(t("profileLabel"));
     this.profileSelect = this.document.createElement("select");
     this.styleControl(this.profileSelect);
     this.profileSelect.addEventListener("change", () => this.renderSensitivity());
@@ -114,15 +123,15 @@ export class QuickOverlay {
       marginTop: "12px",
     });
     this.fields = {
-      hip_x: this.sensitivityInput("Hip sensitivity X"),
-      hip_y: this.sensitivityInput("Hip sensitivity Y"),
-      ads_x: this.sensitivityInput("ADS sensitivity X"),
-      ads_y: this.sensitivityInput("ADS sensitivity Y"),
+      hip_x: this.sensitivityInput(t("hipX")),
+      hip_y: this.sensitivityInput(t("hipY")),
+      ads_x: this.sensitivityInput(t("adsX")),
+      ads_y: this.sensitivityInput(t("adsY")),
     };
     sensitivityGrid.append(
       ...Object.entries(this.fields).map(([key, input]) => {
         const labels: Record<string, string> = {
-          hip_x: "Hip X", hip_y: "Hip Y", ads_x: "ADS X", ads_y: "ADS Y",
+          hip_x: t("hipX"), hip_y: t("hipY"), ads_x: t("adsX"), ads_y: t("adsY"),
         };
         const field = this.label(labels[key]!);
         field.append(input);
@@ -134,39 +143,41 @@ export class QuickOverlay {
     Object.assign(actions.style, {
       display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "16px",
     });
-    const apply = this.button("Use profile");
-    const save = this.button("Save sensitivity");
-    const close = this.button("Close", true);
+    const apply = this.button(t("useProfile"));
+    const save = this.button(t("saveSensitivity"));
+    const close = this.button(t("close"), true);
     apply.addEventListener("click", () => void this.applyProfile());
     save.addEventListener("click", () => void this.saveSensitivity());
     close.addEventListener("click", () => this.close());
     actions.append(apply, save, close);
     this.statusText = this.text("p", "");
     this.statusText.setAttribute("role", "status");
+    this.statusText.setAttribute("aria-live", "polite");
     Object.assign(this.statusText.style, { minHeight: "20px", margin: "12px 0 0", color: "#7ee787" });
     panel.append(
       heading, this.gameText, this.captureText, this.matchText, profileLabel,
       sensitivityGrid, actions, this.statusText,
     );
     this.panel = panel;
+    panel.addEventListener("keydown", (event) => this.onPanelKey(event));
   }
 
   private render(state: OverlayState): void {
     this.state = state;
     this.gameText!.textContent = state.identity
-      ? `Detected game: ${state.identity.title_name} (${state.identity.product_id})`
-      : "Detected game: Unknown";
-    this.captureText!.textContent = `Capture: ${state.capture_active ? "Active" : "Inactive"}`;
+      ? t("detectedGame", `${state.identity.title_name} (${state.identity.product_id})`)
+      : t("detectedGame", t("unknown"));
+    this.captureText!.textContent = t("captureLabel", t(state.capture_active ? "active" : "inactive"));
     this.matchText!.textContent = state.match === "ambiguous"
-      ? "More than one profile matches. Choose one to save an exact association."
+      ? t("ambiguousMatch")
       : state.match === "matched"
-        ? "A unique local game association selected this profile."
-        : "No local game association matched. The current profile remains selected.";
+        ? t("uniqueMatch")
+        : t("noMatch");
     this.profileSelect!.replaceChildren(...state.profiles.map((profile) => {
       const option = this.document.createElement("option");
       option.value = profile.id;
       option.textContent = state.candidate_profile_ids.includes(profile.id) && state.match === "ambiguous"
-        ? `${profile.name} (match)` : profile.name;
+        ? `${profile.name} (${t("matchSuffix")})` : profile.name;
       option.selected = profile.id === state.active_profile_id;
       return option;
     }));
@@ -191,11 +202,11 @@ export class QuickOverlay {
     );
     if (!this.panel || generation !== this.requestGeneration) return;
     if (!next) {
-      this.setStatus("Profile selection was rejected.", true);
+      this.setStatus(t("profileRejected"), true);
       return;
     }
     this.render(next);
-    this.setStatus("Profile saved locally. Restart capture when ready.");
+    this.setStatus(t("profileSavedRestart"));
   }
 
   private async saveSensitivity(): Promise<void> {
@@ -207,18 +218,18 @@ export class QuickOverlay {
       ads_y: this.fields.ads_y.valueAsNumber,
     };
     if (!Object.values(values).every(isSensitivityValue)) {
-      this.setStatus("Sensitivity must be from 0.001 to 0.2.", true);
+      this.setStatus(t("sensitivityRange"), true);
       return;
     }
     const generation = ++this.requestGeneration;
     const next = await this.client.saveSensitivity(this.profileSelect.value, values);
     if (!this.panel || generation !== this.requestGeneration) return;
     if (!next) {
-      this.setStatus("Sensitivity update was rejected.", true);
+      this.setStatus(t("sensitivityRejected"), true);
       return;
     }
     this.render(next);
-    this.setStatus("Sensitivity saved and applied safely.");
+    this.setStatus(t("sensitivitySaved"));
   }
 
   private selectedProfile(): OverlayProfileSummary | undefined {
@@ -281,6 +292,34 @@ export class QuickOverlay {
       borderRadius: "5px",
       font: "14px system-ui, sans-serif",
     });
+    element.addEventListener("focus", () => {
+      element.style.outline = "3px solid #58a6ff";
+      element.style.outlineOffset = "2px";
+    });
+    element.addEventListener("blur", () => {
+      element.style.outline = "";
+      element.style.outlineOffset = "";
+    });
+  }
+
+  private onPanelKey(event: KeyboardEvent): void {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.close();
+      return;
+    }
+    if (event.key !== "Tab" || !this.panel || this.panel.getAttribute("aria-modal") !== "true") return;
+    const controls = [...this.panel.querySelectorAll<HTMLElement>("button, select, input")];
+    const first = controls[0];
+    const last = controls.at(-1);
+    if (!first || !last) return;
+    if (event.shiftKey && this.document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && this.document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   private setStatus(message: string, error = false): void {

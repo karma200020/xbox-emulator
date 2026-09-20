@@ -6,21 +6,21 @@
     <title>Xbox Input Bridge</title>
     <link rel="stylesheet" href="popup.css">
   </head>
-  <body>
+  <body data-i18n-title="extensionName">
     <main>
-      <h1>Xbox Input Bridge</h1>
-      <p id="status" role="status">Checking companion...</p>
-      <label for="backend">Controller mode</label>
+      <h1 data-i18n="extensionName">Xbox Input Bridge</h1>
+      <p id="status" role="status" aria-live="polite" aria-atomic="true" data-i18n="checkingStatus">Checking status…</p>
+      <label for="backend" data-i18n="controllerMode">Controller mode</label>
       <select id="backend">
-        <option value="browser">Browser only (driverless)</option>
+        <option value="browser" data-i18n="browserOnly">Browser only (driverless)</option>
       </select>
       <div class="actions">
-        <button id="start" type="button">Start capture</button>
-        <button id="stop" type="button" class="secondary">Stop</button>
+        <button id="start" type="button" data-i18n="startCapture">Start capture</button>
+        <button id="stop" type="button" class="secondary" data-i18n="stop">Stop</button>
       </div>
-      <button id="edit-mappings" type="button" class="secondary mapping-editor">View / edit mappings</button>
-      <p class="hint">Choose a profile, change keyboard or mouse bindings, then click Save changes.</p>
-      <p class="hint">In fullscreen, click the in-game activation prompt or press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>G</kbd> to start/stop capture. Press <kbd>Esc</kbd> to release the mouse. The default quick-overlay shortcut is <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>P</kbd>.</p>
+      <button id="edit-mappings" type="button" class="secondary mapping-editor" data-i18n="editMappings">View / edit mappings</button>
+      <p class="hint" data-i18n="popupMappingHint">Choose a profile and safely capture keys in the mapping editor.</p>
+      <p class="hint"><span data-i18n="popupShortcutHint">In fullscreen, use the activation prompt or Ctrl+Alt+G. Escape releases input; Ctrl+Alt+P opens quick settings.</span></p>
     </main>
     <script src="popup.js"></script>
   </body>

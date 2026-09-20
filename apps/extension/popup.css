@@ -65,6 +65,11 @@ button.secondary {
   background: #444;
 }
 
+button:focus-visible, select:focus-visible {
+  outline: 3px solid #58a6ff;
+  outline-offset: 2px;
+}
+
 .mapping-editor {
   width: 100%;
   margin-top: 12px;
@@ -80,4 +85,22 @@ kbd {
   padding: 1px 4px;
   border: 1px solid #777;
   border-radius: 3px;
+}
+
+@media (prefers-contrast: more) {
+  body { color: #fff; background: #000; }
+  button, #backend { border: 2px solid #fff; }
+}
+
+:root.high-contrast body { color: #fff; background: #000; }
+:root.high-contrast button, :root.high-contrast #backend {
+  border: 2px solid #fff;
+}
+
+@media (forced-colors: active) {
+  button, #backend, kbd { forced-color-adjust: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }

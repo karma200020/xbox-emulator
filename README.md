@@ -23,6 +23,11 @@ for a later reviewed production backend.
 4. Confirm the in-page activation prompt. Press `Esc` to release pointer lock
    and stop capture.
 
+On first use, the options page opens a local, skippable guide covering
+browser-only limitations, a PC-style starter layout, activation readiness,
+sensitivity calibration, and the mapping editor. The guide never captures
+input automatically and can be restarted with **Restart tour**.
+
 In fullscreen game containers, an activation prompt appears above the game;
 click it to start without opening the extension popup. You can also press
 **Ctrl+Alt+G** on the Xbox play page to start or stop capture, including native
@@ -38,9 +43,17 @@ exits fullscreen before displaying the overlay because HTML cannot render above
 that surface.
 
 Click **View / edit mappings** in the extension popup to see keyboard and mouse
-bindings, browse/search bundled generic FPS, third-person/action, racing,
+bindings, browse/search bundled PC-oriented FPS, third-person/action, racing,
 platformer, and one-handed accessibility presets, and tune separate hip and
-aim-down-sights (ADS) mouse response. Profiles can store normalized product IDs,
+aim-down-sights (ADS) mouse response. Simple mode leads with familiar actions
+such as Move, Look/Aim, Jump, Interact, Reload, Fire, and Pause; the Xbox target
+is secondary context. **Advanced mode** exposes canonical browser key codes and
+raw controller targets. Action names are preset suggestions because each game
+can interpret controller buttons differently.
+
+Select a source and press the desired key or mouse button to remap it. `Esc`
+cancels key capture and remains reserved for releasing gameplay capture.
+Profiles can store normalized product IDs,
 game names, and aliases. The extension observes only documented-style
 `/play/games/<title-slug>/<productId>` URLs and SPA navigation; it does not read
 the page DOM, authentication data, or Xbox traffic. A unique exact product ID or
@@ -48,6 +61,20 @@ explicit alias selects a profile. Ambiguous names display a non-blocking choice,
 and an explicit choice stores the product association locally.
 The extension stores settings locally and requests no Native Messaging
 permission. See `docs\browser-only-mode.md` for limitations.
+
+## Languages and accessibility
+
+The bundled interface supports English, Spanish, Brazilian Portuguese, and
+Hindi, with English as the safe fallback. Programmatic key codes, profile IDs,
+and controller identifiers remain unchanged internally.
+
+The options editor includes an original Xbox-style controller diagram with
+keyboard-focusable controls, text equivalents for every mapped control, and
+live right-stick calibration output. A manual high-contrast mode is available,
+and the UI also responds to system contrast, forced-colors, and reduced-motion
+preferences. Status updates use live regions, controls have meaningful labels,
+and mapping state is never communicated by color alone. These features improve
+accessibility but are not a claim of formal WCAG conformance.
 
 ## Development
 

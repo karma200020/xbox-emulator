@@ -15,6 +15,7 @@ import {
   type OverlayShortcutId,
 } from "./overlay-shortcut";
 import { parseOverlayState, QuickOverlay } from "./quick-overlay";
+import { t } from "./i18n";
 
 const FLUSH_INTERVAL_MS = 8;
 
@@ -146,7 +147,7 @@ function armCapture(focus = true): void {
   overlay = document.createElement("button");
   overlay.type = "button";
   overlay.popover = "manual";
-  overlay.textContent = "Click to activate Xbox Input Bridge";
+  overlay.textContent = t("activationPrompt");
   overlay.setAttribute("aria-label", overlay.textContent);
   Object.assign(overlay.style, {
     position: "fixed",

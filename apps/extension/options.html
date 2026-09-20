@@ -3,168 +3,246 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Profiles · Xbox Input Bridge</title>
+    <title>Controller profiles · Xbox Input Bridge</title>
     <link rel="stylesheet" href="options.css">
   </head>
-  <body>
+  <body data-i18n-title="optionsTitle">
+    <a class="skip-link" href="#editor" data-i18n="skipToEditor">Skip to mapping editor</a>
     <header>
       <div>
-        <p class="eyebrow">Xbox Input Bridge</p>
-        <h1>Controller profiles</h1>
-        <p>View or edit the keyboard and mouse bindings below, then click Save changes. Profiles stay in this browser.</p>
+        <p class="eyebrow" data-i18n="extensionName">Xbox Input Bridge</p>
+        <h1 data-i18n="profilesHeading">Controller profiles</h1>
+        <p data-i18n="profilesIntro">Edit local keyboard and mouse mappings. Nothing is uploaded.</p>
       </div>
-      <div class="toolbar" aria-label="Profile actions">
-        <button id="import" type="button" class="secondary">Import JSON</button>
-        <button id="export" type="button" class="secondary">Export JSON</button>
-        <button id="reset" type="button" class="danger">Reset starters</button>
-        <button id="save" type="button">Save changes</button>
+      <div class="toolbar" data-i18n-aria-label="profileActionsLabel" aria-label="Profile actions">
+        <button id="restart-onboarding" type="button" class="secondary" data-i18n="restartTour">Restart tour</button>
+        <button id="advanced-mode" type="button" class="secondary" aria-pressed="false" data-i18n="advancedMode">Advanced mode</button>
+        <button id="contrast" type="button" class="secondary" aria-pressed="false" data-i18n="highContrast">High contrast</button>
+        <button id="import" type="button" class="secondary" data-i18n="importJson">Import JSON</button>
+        <button id="export" type="button" class="secondary" data-i18n="exportJson">Export JSON</button>
+        <button id="reset" type="button" class="danger" data-i18n="resetStarters">Reset starters</button>
+        <button id="save" type="button" data-i18n="saveChanges">Save changes</button>
       </div>
       <input id="import-file" type="file" accept="application/json,.json" hidden>
     </header>
 
     <main>
-      <div id="status" class="status" role="status" aria-live="polite"></div>
+      <div id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></div>
+      <button id="resume-onboarding" type="button" class="secondary resume-onboarding" hidden data-i18n="resumeTour">Continue onboarding</button>
       <section class="profile-bar" aria-labelledby="profile-heading">
         <div>
-          <label for="profile-search">Search local presets
-            <input id="profile-search" type="search" placeholder="FPS, racing, accessibility…">
+          <label for="profile-search"><span data-i18n="searchPresets">Search local presets</span>
+            <input id="profile-search" type="search" placeholder="FPS, racing, accessibility" data-i18n-placeholder="searchPlaceholder">
           </label>
-          <label id="profile-heading" for="profile">Profile</label>
+          <label id="profile-heading" for="profile" data-i18n="profileLabel">Profile</label>
           <select id="profile"></select>
         </div>
         <div class="profile-actions">
-          <button id="duplicate-profile" type="button" class="secondary">Duplicate</button>
-          <button id="delete-profile" type="button" class="danger">Delete</button>
+          <button id="duplicate-profile" type="button" class="secondary" data-i18n="duplicateProfile">Duplicate</button>
+          <button id="delete-profile" type="button" class="danger" data-i18n="deleteProfile">Delete</button>
         </div>
       </section>
 
       <form id="editor" novalidate>
+        <section class="card controller-card" aria-labelledby="controller-heading">
+          <div class="section-title">
+            <div>
+              <h2 id="controller-heading" data-i18n="controllerPreviewHeading">Live controller map</h2>
+              <p class="help" data-i18n="controllerPreviewHelp">Focus a control to hear its current input sources. Calibration updates the right-stick output.</p>
+            </div>
+          </div>
+          <div class="controller-layout">
+            <svg id="controller-diagram" class="controller-diagram" viewBox="0 0 720 400" role="group" aria-labelledby="controller-heading controller-summary">
+              <path class="controller-shell" d="M174 78C92 91 52 171 39 275c-8 65 62 84 99 35l60-79h324l60 79c37 49 107 30 99-35-13-104-53-184-135-197-52-8-112 20-186 20S226 70 174 78Z"></path>
+              <g class="controller-control" data-target="button:256" tabindex="0"><rect x="155" y="62" width="115" height="30" rx="12"></rect><text x="212" y="82">LB</text></g>
+              <g class="controller-control" data-target="button:512" tabindex="0"><rect x="450" y="62" width="115" height="30" rx="12"></rect><text x="507" y="82">RB</text></g>
+              <g class="controller-control" data-target="left_trigger" tabindex="0"><rect x="178" y="22" width="70" height="28" rx="10"></rect><text x="213" y="42">LT</text></g>
+              <g class="controller-control" data-target="right_trigger" tabindex="0"><rect x="472" y="22" width="70" height="28" rx="10"></rect><text x="507" y="42">RT</text></g>
+              <g class="controller-control" data-target="button:64" tabindex="0"><circle cx="238" cy="214" r="39"></circle><text x="238" y="220">LS</text></g>
+              <g class="controller-control" data-target="button:128" tabindex="0"><circle cx="424" cy="275" r="39"></circle><text x="424" y="281">RS</text><circle id="controller-stick-dot" class="controller-output-dot" cx="424" cy="275" r="7"></circle></g>
+              <g class="controller-control" data-target="button:4096" tabindex="0"><circle cx="566" cy="248" r="24"></circle><text x="566" y="254">A</text></g>
+              <g class="controller-control" data-target="button:8192" tabindex="0"><circle cx="612" cy="202" r="24"></circle><text x="612" y="208">B</text></g>
+              <g class="controller-control" data-target="button:16384" tabindex="0"><circle cx="520" cy="202" r="24"></circle><text x="520" y="208">X</text></g>
+              <g class="controller-control" data-target="button:32768" tabindex="0"><circle cx="566" cy="156" r="24"></circle><text x="566" y="162">Y</text></g>
+              <g class="controller-control" data-target="button:1" tabindex="0"><path d="M123 171h42v36h-42z"></path><text x="144" y="195">↑</text></g>
+              <g class="controller-control" data-target="button:2" tabindex="0"><path d="M123 243h42v36h-42z"></path><text x="144" y="267">↓</text></g>
+              <g class="controller-control" data-target="button:4" tabindex="0"><path d="M87 207h42v36H87z"></path><text x="108" y="231">←</text></g>
+              <g class="controller-control" data-target="button:8" tabindex="0"><path d="M159 207h42v36h-42z"></path><text x="180" y="231">→</text></g>
+              <g class="controller-control" data-target="button:32" tabindex="0"><circle cx="316" cy="185" r="18"></circle><text x="316" y="190">◀</text></g>
+              <g class="controller-control" data-target="button:16" tabindex="0"><circle cx="404" cy="185" r="18"></circle><text x="404" y="190">▶</text></g>
+              <g class="controller-control" data-target="button:1024" tabindex="0"><circle cx="360" cy="145" r="20"></circle><text x="360" y="151">G</text></g>
+              <g class="axis-zone" data-target="left_x_negative" tabindex="0"><path d="M198 214h28"></path></g>
+              <g class="axis-zone" data-target="left_x_positive" tabindex="0"><path d="M250 214h28"></path></g>
+              <g class="axis-zone" data-target="left_y_negative" tabindex="0"><path d="M238 226v28"></path></g>
+              <g class="axis-zone" data-target="left_y_positive" tabindex="0"><path d="M238 174v28"></path></g>
+            </svg>
+            <div>
+              <p id="controller-summary" class="help" data-i18n="controllerSummary">Mapped controls are listed below; unmapped controls remain available.</p>
+              <output id="controller-output" class="controller-output" aria-live="polite">Right stick X 0.000, Y 0.000</output>
+              <ul id="controller-mappings" class="controller-mappings"></ul>
+            </div>
+          </div>
+        </section>
+
         <section class="card" aria-labelledby="identity-heading">
-          <h2 id="identity-heading">Identity</h2>
+          <h2 id="identity-heading" data-i18n="identityHeading">Identity</h2>
           <div class="grid two">
-            <label>Name <input id="profile-name" maxlength="60" required></label>
-            <label>Profile ID <input id="profile-id" maxlength="40" pattern="[a-z0-9][a-z0-9_-]*" required></label>
+            <label><span data-i18n="nameLabel">Name</span> <input id="profile-name" maxlength="60" required></label>
+            <label><span data-i18n="profileIdLabel">Profile ID</span> <input id="profile-id" maxlength="40" pattern="[a-z0-9][a-z0-9_-]*" required></label>
           </div>
         </section>
 
         <section class="card" aria-labelledby="overlay-heading">
-          <h2 id="overlay-heading">In-game quick overlay</h2>
-          <label>Shortcut
+          <h2 id="overlay-heading" data-i18n="overlayHeading">In-game quick overlay</h2>
+          <label><span data-i18n="shortcutLabel">Shortcut</span>
             <select id="overlay-shortcut"></select>
-            <span class="help">The overlay shortcut is separate from Ctrl+Alt+G and Escape. Opening it never starts capture.</span>
+            <span class="help" data-i18n="overlayHelp">This shortcut is separate from capture and never starts capture.</span>
           </label>
         </section>
 
         <section class="card" aria-labelledby="aim-heading">
           <div class="section-title">
             <div>
-              <h2 id="aim-heading">Mouse response</h2>
-              <p class="help">Tune transient right-stick output. This remains subject to each game's controller limits and is not native mouse input.</p>
+              <h2 id="aim-heading" data-i18n="mouseResponseHeading">Mouse response</h2>
+              <p class="help" data-i18n="mouseResponseHelp">Tune temporary right-stick output. This is not native mouse input.</p>
             </div>
-            <label>Editing mode
+            <label><span data-i18n="editingModeLabel">Editing mode</span>
               <select id="response-mode">
-                <option value="hip">Hip</option>
-                <option value="ads">Aim down sights (ADS)</option>
+                <option value="hip" data-i18n="hipMode">Hip</option>
+                <option value="ads" data-i18n="adsMode">Aim down sights (ADS)</option>
               </select>
             </label>
           </div>
-          <label class="ads-source">Hold source for ADS response
+          <label class="ads-source"><span data-i18n="adsSourceLabel">Hold source for ADS response</span>
             <select id="ads-source"></select>
-            <span class="help">Choose an existing binding. None keeps the hip response active.</span>
+            <span class="help" data-i18n="adsSourceHelp">Choose an existing binding. None keeps hip response active.</span>
           </label>
           <div class="grid controls">
-            <label>Sensitivity X
-              <input id="sensitivity-x" type="number" min="0.001" max="0.2" step="0.001" required>
-            </label>
-            <label>Sensitivity Y
-              <input id="sensitivity-y" type="number" min="0.001" max="0.2" step="0.001" required>
-            </label>
-            <label>Deadzone
-              <input id="deadzone" type="number" min="0" max="0.95" step="0.01" required>
-            </label>
-            <label>Response curve
+            <label><span data-i18n="sensitivityX">Sensitivity X</span><input id="sensitivity-x" type="number" min="0.001" max="0.2" step="0.001" required></label>
+            <label><span data-i18n="sensitivityY">Sensitivity Y</span><input id="sensitivity-y" type="number" min="0.001" max="0.2" step="0.001" required></label>
+            <label><span data-i18n="deadzone">Deadzone</span><input id="deadzone" type="number" min="0" max="0.95" step="0.01" required></label>
+            <label><span data-i18n="responseCurve">Response curve</span>
               <select id="curve">
-                <option value="linear">Linear</option>
-                <option value="precision">Precision</option>
-                <option value="exponential">Exponential</option>
+                <option value="linear" data-i18n="linearCurve">Linear</option>
+                <option value="precision" data-i18n="precisionCurve">Precision</option>
+                <option value="exponential" data-i18n="exponentialCurve">Exponential</option>
               </select>
             </label>
-            <label>Smoothing
-              <input id="smoothing" type="number" min="0" max="0.95" step="0.05" required>
-            </label>
-            <label>Velocity scaling
-              <input id="velocity-scale" type="number" min="0" max="4" step="0.1" required>
-            </label>
+            <label><span data-i18n="smoothing">Smoothing</span><input id="smoothing" type="number" min="0" max="0.95" step="0.05" required></label>
+            <label><span data-i18n="velocityScaling">Velocity scaling</span><input id="velocity-scale" type="number" min="0" max="4" step="0.1" required></label>
           </div>
           <div class="checks">
-            <label><input id="invert-x" type="checkbox"> Invert horizontal axis</label>
-            <label><input id="invert-y" type="checkbox"> Invert vertical axis</label>
+            <label><input id="invert-x" type="checkbox"> <span data-i18n="invertX">Invert horizontal axis</span></label>
+            <label><input id="invert-y" type="checkbox"> <span data-i18n="invertY">Invert vertical axis</span></label>
           </div>
           <div class="response-tools">
             <figure class="curve-preview">
-              <figcaption>Response curve preview</figcaption>
-              <svg id="curve-preview" viewBox="0 0 320 180" role="img" aria-label="Response curve preview">
+              <figcaption data-i18n="curvePreview">Response curve preview</figcaption>
+              <svg id="curve-preview" viewBox="0 0 320 180" role="img" data-i18n-aria-label="curvePreview" aria-label="Response curve preview">
                 <path class="preview-grid" d="M24 8V156H312M24 156L312 8"></path>
                 <polyline id="curve-line" points=""></polyline>
               </svg>
             </figure>
             <section class="calibration" aria-labelledby="calibration-heading">
-              <h3 id="calibration-heading">Local pointer calibration</h3>
-              <p class="help">Start, then move the pointer naturally. Up to 240 samples stay in memory only and are discarded when stopped.</p>
+              <h3 id="calibration-heading" data-i18n="calibrationHeading">Local pointer calibration</h3>
+              <p class="help" data-i18n="calibrationHelp">Start, then move naturally. Samples stay in memory and are discarded when stopped.</p>
               <div class="calibration-actions">
-                <button id="start-calibration" type="button">Start calibration</button>
-                <button id="stop-calibration" type="button" class="secondary" disabled>Stop</button>
+                <button id="start-calibration" type="button" data-i18n="startCalibration">Start calibration</button>
+                <button id="stop-calibration" type="button" class="secondary" disabled data-i18n="stop">Stop</button>
               </div>
-              <div id="calibration-surface" class="calibration-surface" tabindex="0" aria-label="Calibration capture surface">
-                <span id="calibration-state">Stopped</span>
-                <div class="stick-plot" role="img" aria-label="Normalized right stick">
+              <div id="calibration-surface" class="calibration-surface" tabindex="0" data-i18n-aria-label="calibrationSurface" aria-label="Calibration capture surface">
+                <span id="calibration-state" data-i18n="stopped">Stopped</span>
+                <div class="stick-plot" role="img" data-i18n-aria-label="normalizedRightStick" aria-label="Normalized right stick">
                   <span class="crosshair horizontal"></span><span class="crosshair vertical"></span>
                   <span id="stick-dot" class="stick-dot"></span>
                 </div>
               </div>
               <output id="calibration-values" class="calibration-values" aria-live="polite">Raw Δ 0, 0 · Stick 0.000, 0.000 · 0 samples</output>
               <div id="suggestion" class="suggestion" hidden>
-                Suggested sensitivity: <strong id="suggested-value"></strong>
-                <button id="apply-suggestion" type="button" class="secondary">Apply to X and Y</button>
+                <span data-i18n="suggestedSensitivity">Suggested sensitivity:</span> <strong id="suggested-value"></strong>
+                <button id="apply-suggestion" type="button" class="secondary" data-i18n="applySuggestion">Apply to X and Y</button>
               </div>
-            </section>
-
-            <section class="card" aria-labelledby="games-heading">
-              <div class="section-title">
-                <div>
-                  <h2 id="games-heading">Game associations</h2>
-                  <p class="help">Optional local metadata for conservative URL-based selection. Product IDs match first; normalized title names and aliases are used only when the match is unique.</p>
-                </div>
-                <button id="add-game" type="button" class="secondary">Add game</button>
-              </div>
-              <div id="game-associations"></div>
             </section>
           </div>
         </section>
 
+        <section class="card" aria-labelledby="games-heading">
+          <div class="section-title">
+            <div>
+              <h2 id="games-heading" data-i18n="gamesHeading">Game associations</h2>
+              <p class="help" data-i18n="gamesHelp">Optional local metadata for conservative URL-based profile selection.</p>
+            </div>
+            <button id="add-game" type="button" class="secondary" data-i18n="addGame">Add game</button>
+          </div>
+          <div id="game-associations"></div>
+        </section>
+
         <div class="binding-grid">
+          <p class="pc-core-summary" data-i18n="pcCoreSummary">Move with WASD · Look / Aim with the mouse</p>
+          <p class="mapping-disclaimer" data-i18n="actionDisclaimer">Action names are familiar suggestions from this preset. Games may interpret controller buttons differently, so adjust mappings to match the game.</p>
           <section class="card" aria-labelledby="keyboard-heading">
             <div class="section-title">
-              <div><h2 id="keyboard-heading">Keyboard bindings</h2><p class="help">Edit the key code (KeyW = W, Space = spacebar, ShiftLeft = left Shift), then choose its Xbox target. Esc is reserved for stopping capture.</p></div>
-              <button id="add-key" type="button" class="secondary">Add</button>
+              <div><h2 id="keyboard-heading" data-i18n="keyboardBindings">Keyboard bindings</h2><p class="help" data-i18n="keyboardHelp">Choose a source button, then press a key. Escape cancels and remains reserved for release.</p></div>
+              <button id="add-key" type="button" class="secondary" data-i18n="addBinding">Add binding</button>
             </div>
             <div id="key-bindings" class="bindings"></div>
           </section>
           <section class="card" aria-labelledby="mouse-heading">
             <div class="section-title">
-              <div><h2 id="mouse-heading">Mouse bindings</h2><p class="help">0 = left click, 1 = middle click, 2 = right click, 3 = back, 4 = forward. Mouse movement controls the right stick.</p></div>
-              <button id="add-mouse" type="button" class="secondary">Add</button>
+              <div><h2 id="mouse-heading" data-i18n="mouseBindings">Mouse bindings</h2><p class="help" data-i18n="mouseHelp">Choose a source button, then press a supported mouse button. Movement controls the right stick.</p></div>
+              <button id="add-mouse" type="button" class="secondary" data-i18n="addBinding">Add binding</button>
             </div>
             <div id="mouse-bindings" class="bindings"></div>
           </section>
         </div>
 
         <section id="conflicts-card" class="card warning" aria-labelledby="conflicts-heading" hidden>
-          <h2 id="conflicts-heading">Profile warnings</h2>
+          <h2 id="conflicts-heading" data-i18n="profileWarnings">Profile warnings</h2>
           <ul id="conflicts"></ul>
         </section>
       </form>
     </main>
+
+    <dialog id="onboarding" aria-labelledby="onboarding-title" aria-describedby="onboarding-description">
+      <div class="onboarding-progress" id="onboarding-progress"></div>
+      <section class="onboarding-step" data-step="0">
+        <p class="eyebrow" data-i18n="welcomeEyebrow">First-run guide</p>
+        <h2 id="onboarding-title" data-i18n="welcomeTitle">Welcome to Xbox Input Bridge</h2>
+        <p id="onboarding-description" data-i18n="welcomeDescription">This extension works only in supported Xbox Cloud Gaming browser pages. It does not create a Windows controller, work in installed games, or access the network.</p>
+        <p class="notice" data-i18n="noAutoCapture">Input is never captured automatically. Starting capture always requires your explicit action, and Escape releases it.</p>
+        <h3 data-i18n="glossaryTitle">PC-to-controller quick guide</h3>
+        <dl class="glossary">
+          <div><dt data-i18n="glossaryStick">Stick</dt><dd data-i18n="glossaryStickDescription">A directional control. WASD usually becomes the left stick; mouse movement becomes the right stick.</dd></div>
+          <div><dt data-i18n="glossaryTrigger">Trigger</dt><dd data-i18n="glossaryTriggerDescription">A pressure-style control commonly used for fire, aim, accelerate, or brake.</dd></div>
+          <div><dt data-i18n="glossaryButtons">Buttons and D-pad</dt><dd data-i18n="glossaryButtonsDescription">Games decide what A/B/X/Y, bumpers, Menu/View, and directional-pad controls do.</dd></div>
+        </dl>
+      </section>
+      <section class="onboarding-step" data-step="1" hidden>
+        <h2 data-i18n="starterTitle">Choose a starter layout</h2>
+        <p data-i18n="starterDescription">Pick the closest starting point. You can change every mapping later.</p>
+        <label><span data-i18n="starterLayout">Starter layout</span><select id="onboarding-profile"></select></label>
+      </section>
+      <section class="onboarding-step" data-step="2" hidden>
+        <h2 data-i18n="readinessTitle">Activation readiness</h2>
+        <p data-i18n="readinessDescription">These local checks confirm the editor can prepare browser-only capture.</p>
+        <ul id="readiness-list" class="readiness-list"></ul>
+      </section>
+      <section class="onboarding-step" data-step="3" hidden>
+        <h2 data-i18n="calibrationTourTitle">Tune sensitivity</h2>
+        <p data-i18n="calibrationTourDescription">Use local pointer calibration to preview right-stick output. Calibration is opt-in and samples are discarded when stopped.</p>
+        <button id="tour-calibration" type="button" class="secondary" data-i18n="tryCalibration">Try calibration now</button>
+      </section>
+      <section class="onboarding-step" data-step="4" hidden>
+        <h2 data-i18n="mappingTourTitle">Review your mappings</h2>
+        <p data-i18n="mappingTourDescription">The visual controller map and source buttons expose the same mapping information to sighted and screen-reader users.</p>
+        <button id="tour-mappings" type="button" class="secondary" data-i18n="openMappings">Open keyboard mappings</button>
+      </section>
+      <div class="onboarding-actions">
+        <button id="onboarding-skip" type="button" class="secondary" data-i18n="skipTour">Skip tour</button>
+        <button id="onboarding-back" type="button" class="secondary" data-i18n="back" disabled>Back</button>
+        <button id="onboarding-next" type="button" data-i18n="next">Next</button>
+      </div>
+    </dialog>
     <script src="options.js"></script>
   </body>
 </html>

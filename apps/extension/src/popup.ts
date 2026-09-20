@@ -1,14 +1,17 @@
 import { isRuntimeMessage, type RuntimeMessage } from "./protocol";
 import { BACKEND_MODE_STORAGE_KEY, type BackendMode } from "./profile-schema";
 import { isXboxPlayUrl } from "./xbox-url";
+import { localizeDocument, t } from "./i18n";
 
+localizeDocument();
 const statusElement = requireElement<HTMLParagraphElement>("status");
 const startButton = requireElement<HTMLButtonElement>("start");
 const stopButton = requireElement<HTMLButtonElement>("stop");
 const backendSelect = requireElement<HTMLSelectElement>("backend");
 const mappingsButton = requireElement<HTMLButtonElement>("edit-mappings");
 
-void chrome.storage.local.get(BACKEND_MODE_STORAGE_KEY).then((stored) => {
+void chrome.storage.local.get([BACKEND_MODE_STORAGE_KEY, "xib.high_contrast"]).then((stored) => {
+  document.documentElement?.classList.toggle("high-contrast", stored["xib.high_contrast"] === true);
   if (!chrome.runtime.getManifest().permissions?.includes("nativeMessaging")) {
     backendSelect.value = "browser";
     backendSelect.disabled = true;
@@ -45,7 +48,7 @@ async function openMappings(): Promise<void> {
     await chrome.runtime.openOptionsPage();
     window.close();
   } catch {
-    statusElement.textContent = "Could not open the mapping editor. Please try again.";
+    statusElement.textContent = t("openEditorFailed");
   } finally {
     mappingsButton.disabled = false;
   }
@@ -61,26 +64,26 @@ async function refreshStatus(): Promise<void> {
 async function armActiveTab(): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !tab.url || !isXboxPlayUrl(tab.url)) {
-    statusElement.textContent = "Open Xbox Cloud Gaming before starting capture.";
+    statusElement.textContent = t("openXboxFirst");
     return;
   }
   try {
     await chrome.tabs.sendMessage(tab.id, { type: "arm_capture" } satisfies RuntimeMessage);
     window.close();
   } catch {
-    statusElement.textContent = "Reload the Xbox Cloud Gaming tab and try again.";
+    statusElement.textContent = t("reloadXbox");
   }
 }
 
 function renderStatus(message: Extract<RuntimeMessage, { type: "status_update" }>): void {
   if (message.error) {
-    statusElement.textContent = message.error;
+    statusElement.textContent = t("captureError");
   } else if (message.active) {
-    statusElement.textContent = `Capture active (${message.backend ?? "controller"} backend).`;
+    statusElement.textContent = t("captureActive", message.backend ?? t("controllerBackend"));
   } else if (message.connected) {
-    statusElement.textContent = "Companion connected. Capture is inactive.";
+    statusElement.textContent = t("companionConnected");
   } else {
-    statusElement.textContent = "Capture is inactive.";
+    statusElement.textContent = t("captureInactive");
   }
   stopButton.disabled = !message.active;
 }

@@ -10,6 +10,9 @@ only while the user has explicitly activated capture.
   Xbox Cloud Gaming page. It requests no Native Messaging permission and has no
   network client, telemetry SDK, advertising, or cloud synchronization.
 - Profiles remain local. Export requires an explicit user action.
+- Onboarding completion/skip state and the high-contrast preference remain in
+  extension-local storage. Restarting onboarding does not transmit or capture
+  input.
 - Automatic profile selection reads only the current xCloud route's title slug
   and product ID. It does not read arbitrary page content, account/session data,
   or Xbox network traffic. Explicit game/profile associations remain in local
