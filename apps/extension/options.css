@@ -56,7 +56,7 @@ main {
   margin: 24px auto 48px;
 }
 
-.toolbar, .profile-actions, .checks, .section-title, .calibration-actions {
+.toolbar, .profile-actions, .checks, .section-title, .calibration-actions, .diagnostics-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -172,6 +172,19 @@ input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--gree
 .warning { border-color: #9e6a03; background: #211b0b; }
 .warning h2 { color: #e3b341; }
 .warning ul { margin-bottom: 0; }
+.diagnostics-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, .8fr) minmax(220px, 1.2fr);
+  gap: 8px 18px;
+  margin: 16px 0;
+}
+.diagnostics-grid dt { color: var(--muted); font-weight: 700; }
+.diagnostics-grid dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.self-test-results { display: grid; gap: 8px; margin-bottom: 0; padding-left: 28px; }
+.self-test-pass { color: #7ee787; }
+.self-test-warn { color: #e3b341; }
+.self-test-fail { color: #ffb4ab; }
+hr { margin: 20px 0; border: 0; border-top: 1px solid var(--border); }
 
 .capture-source {
   overflow-wrap: anywhere;

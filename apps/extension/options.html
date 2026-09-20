@@ -100,6 +100,36 @@
           </label>
         </section>
 
+        <section class="card" aria-labelledby="diagnostics-heading">
+          <div class="section-title">
+            <div>
+              <h2 id="diagnostics-heading" data-i18n="diagnosticsHeading">Local diagnostics</h2>
+              <p class="help" data-i18n="diagnosticsHelp">Bounded aggregate measurements only. No raw input, browsing history, or network/game-stream latency is collected.</p>
+            </div>
+            <div class="diagnostics-actions">
+              <button id="refresh-diagnostics" type="button" class="secondary" data-i18n="refreshDiagnostics">Refresh</button>
+              <button id="export-diagnostics" type="button" class="secondary" data-i18n="exportDiagnostics">Export diagnostics</button>
+              <button id="reset-diagnostics" type="button" class="danger" data-i18n="resetDiagnostics">Reset diagnostics</button>
+            </div>
+          </div>
+          <div class="checks">
+            <label><input id="persist-diagnostics" type="checkbox"> <span data-i18n="persistDiagnostics">Persist aggregate diagnostics on this device</span></label>
+            <label><input id="performance-overlay" type="checkbox"> <span data-i18n="performanceOverlay">Show compact performance status in the quick overlay</span></label>
+          </div>
+          <p id="diagnostics-status" class="help" role="status" aria-live="polite"></p>
+          <dl id="diagnostics-metrics" class="diagnostics-grid"></dl>
+          <p class="help" data-i18n="measurementNotice">Mapping duration is measured in MAIN with performance.now(). Pipeline duration is an isolated-world round-trip estimate and does not measure network or game-stream latency.</p>
+          <hr>
+          <div class="section-title">
+            <div>
+              <h3 data-i18n="selfTestHeading">Compatibility self-tests</h3>
+              <p class="help" data-i18n="selfTestHelp">These checks validate local browser plumbing only; they do not launch or validate a game.</p>
+            </div>
+            <button id="run-self-tests" type="button" class="secondary" data-i18n="runSelfTests">Run local checks</button>
+          </div>
+          <ol id="self-test-results" class="self-test-results" aria-live="polite"></ol>
+        </section>
+
         <section class="card" aria-labelledby="aim-heading">
           <div class="section-title">
             <div>

@@ -34,7 +34,9 @@ approved Xbox Cloud Gaming origins. Its responsibilities are:
 - stop capture and request neutral state on blur, navigation, tab closure,
   extension suspension, protocol error, or user deactivation; and
 - display companion, protocol, and activation status without collecting usage
-  data.
+  data; and
+- maintain bounded local reliability aggregates, defaulting to ephemeral
+  storage, with explicit opt-in persistence and privacy-safe manual export.
 
 The release service worker manages activation and profiles. A narrowly injected
 isolated content script handles page-focused input capture, while a MAIN-world
@@ -214,6 +216,13 @@ Live profile replacement is a neutralize-then-apply transaction in both browser
 and companion modes. Runtime messages use exact-key validation, and the service
 worker accepts game/profile commands only from the top frame of the owning
 eligible Xbox tab.
+
+The optional compact performance block is off by default and exists only while
+the quick overlay is open. MAIN-world mapping duration is measured with
+`performance.now()` around the mapper call. The isolated content script measures
+its own send-to-ack interval and labels it as an extension-pipeline estimate;
+clocks from different realms are never subtracted. No metric claims network or
+game-stream latency.
 
 ## Failure handling and invariants
 

@@ -24,6 +24,15 @@ import {
   parseXcloudGameIdentity,
   type GameIdentity,
 } from "./game-profile";
+import {
+  DIAGNOSTICS_PERSIST_STORAGE_KEY,
+  DIAGNOSTICS_SNAPSHOT_STORAGE_KEY,
+  PERFORMANCE_OVERLAY_STORAGE_KEY,
+  DiagnosticsCollector,
+  buildDiagnosticsExport,
+  type DiagnosticFailureCategory,
+  type DiagnosticsSnapshot,
+} from "./diagnostics";
 
 type BridgeStatus = {
   connected: boolean;
@@ -31,6 +40,7 @@ type BridgeStatus = {
   error: string | null;
   backend: string | null;
 };
+const diagnosticsReady = loadDiagnosticsPreferences();
 
 let port: chrome.runtime.Port | null = null;
 let sequence = 0;
@@ -47,6 +57,11 @@ const detectedGames = new Map<number, GameIdentity | null>();
 const internalProfileWrites = new Set<string>();
 let profileMutationQueue: Promise<void> = Promise.resolve();
 let profileMutationCount = 0;
+const diagnostics = new DiagnosticsCollector();
+let diagnosticsPersistence = false;
+let performanceOverlay = false;
+let diagnosticsPersistenceTimer: ReturnType<typeof setTimeout> | null = null;
+let nativeConnectionAttempts = 0;
 let status: BridgeStatus = {
   connected: false,
   active: false,
@@ -62,6 +77,7 @@ chrome.runtime.onMessage.addListener(
   ) => {
     if (!isRuntimeMessage(rawMessage)) return false;
     void handleRuntimeMessage(rawMessage, sender).then(sendResponse, (error: unknown) => {
+      recordFailure("runtime", "runtime_message_failed");
       failClosed(error instanceof Error ? error.message : "Extension operation failed", "runtime_failure");
       sendResponse({ type: "status_update", ...status });
     });
@@ -87,6 +103,7 @@ async function handleRuntimeMessage(
     case "capture_heartbeat":
       if (!isXboxSender(sender)) return status;
       if (sender.tab?.id !== activeTabId || (!status.active && !activationRequested)) {
+        recordFailure("watchdog", "capture_session_expired");
         await sendToTab(sender.tab!.id!, { type: "stop_capture", reason: "capture_session_expired" });
       }
       return status;
@@ -135,6 +152,37 @@ async function handleRuntimeMessage(
       if (!isXboxSender(sender)) return status;
       detectedGames.set(sender.tab!.id!, identityFromSender(sender));
       return buildOverlayState(sender.tab!.id!);
+    case "diagnostics_sample":
+      if (!isXboxSender(sender) || sender.tab?.id !== activeTabId) return status;
+      await diagnosticsReady;
+      diagnostics.addSample(message.sample);
+      scheduleDiagnosticsPersistence();
+      return status;
+    case "get_diagnostics":
+      if (!isExtensionPageSender(sender)) return status;
+      await diagnosticsReady;
+      return diagnosticsResponse();
+    case "reset_diagnostics":
+      if (!isExtensionPageSender(sender)) return status;
+      await diagnosticsReady;
+      diagnostics.reset();
+      await persistDiagnosticsNow();
+      return diagnosticsResponse();
+    case "set_diagnostics_preferences":
+      if (!isExtensionPageSender(sender)) return status;
+      await diagnosticsReady;
+      diagnosticsPersistence = message.persistence;
+      performanceOverlay = message.performance_overlay;
+      await chrome.storage.local.set({
+        [DIAGNOSTICS_PERSIST_STORAGE_KEY]: diagnosticsPersistence,
+        [PERFORMANCE_OVERLAY_STORAGE_KEY]: performanceOverlay,
+      });
+      if (diagnosticsPersistence) await persistDiagnosticsNow();
+      else await chrome.storage.local.remove(DIAGNOSTICS_SNAPSHOT_STORAGE_KEY);
+      return diagnosticsResponse();
+    case "diagnostics_ping":
+      if (!isExtensionPageSender(sender)) return status;
+      return runBridgeSelfTest();
     case "select_profile":
       if (!isXboxSender(sender) || !canManageTab(sender.tab!.id!)) return status;
       detectedGames.set(sender.tab!.id!, identityFromSender(sender));
@@ -224,6 +272,7 @@ async function buildOverlayState(
   tabId: number,
   suppliedDocument?: ProfileDocument,
 ): Promise<RuntimeMessage> {
+  await diagnosticsReady;
   const document = suppliedDocument ?? await loadProfileDocument();
   if (!document) return buildUnavailableOverlayState(tabId);
   const identity = detectedGames.get(tabId) ?? null;
@@ -244,6 +293,8 @@ async function buildOverlayState(
       ads_y: profile.mouse.ads.sensitivity_y,
     })),
     capture_active: status.active && activeTabId === tabId,
+    performance_enabled: performanceOverlay,
+    performance: performanceSummary(),
   };
 }
 
@@ -264,6 +315,8 @@ function buildUnavailableOverlayState(tabId: number): RuntimeMessage {
       ads_y: profile.mouse.ads.sensitivity_y,
     })),
     capture_active: false,
+    performance_enabled: performanceOverlay,
+    performance: performanceSummary(),
   };
 }
 
@@ -271,8 +324,10 @@ async function loadProfileDocument(): Promise<ProfileDocument | null> {
   try {
     const stored = await chrome.storage.local.get(PROFILE_STORAGE_KEY);
     const parsed = parseProfileDocument(stored[PROFILE_STORAGE_KEY]);
+    if (!parsed.ok) recordFailure("profile", "stored_profile_invalid");
     return parsed.ok ? parsed.value : null;
   } catch {
+    recordFailure("storage", "profile_read_failed");
     return null;
   }
 }
@@ -283,6 +338,7 @@ async function persistProfileDocument(document: ProfileDocument): Promise<void> 
   try {
     await chrome.storage.local.set({ [PROFILE_STORAGE_KEY]: document });
   } catch (error) {
+    recordFailure("bridge", "companion_unavailable");
     internalProfileWrites.delete(serialized);
     throw error;
   }
@@ -290,6 +346,10 @@ async function persistProfileDocument(document: ProfileDocument): Promise<void> 
 
 async function applyProfileToActiveCapture(profile: Profile, tabId: number): Promise<void> {
   if (activeTabId !== tabId || (!status.active && !activationRequested)) return;
+  if (activeProfile && activeProfile.id !== profile.id) {
+    diagnostics.recordProfileSwitch();
+    scheduleDiagnosticsPersistence();
+  }
   const generation = ++activationGeneration;
   activationRequested = true;
   activeProfile = profile;
@@ -352,6 +412,8 @@ async function prepareActivation(
     deactivate("capture_replaced");
     void sendToTab(previousTabId, { type: "stop_capture", reason: "capture_replaced" });
   }
+  diagnostics.startCapture();
+  scheduleDiagnosticsPersistence();
   const generation = ++activationGeneration;
   activeTabId = tabId;
   activationRequested = true;
@@ -398,6 +460,8 @@ async function prepareActivation(
 
 function connect(): void {
   if (port) return;
+  nativeConnectionAttempts += 1;
+  if (nativeConnectionAttempts > 1) diagnostics.recordBridgeReconnect();
   try {
     port = chrome.runtime.connectNative(NATIVE_HOST);
     const nativePort = port;
@@ -410,6 +474,7 @@ function connect(): void {
       handshakeComplete = false;
       inFlightProfile = null;
       stopHeartbeat();
+      recordFailure("bridge", "companion_disconnected");
       if (shouldFallback) {
         void activateBrowser(activeProfile!);
         return;
@@ -453,6 +518,7 @@ function connect(): void {
 
 function handleHostMessage(rawMessage: unknown): void {
   if (!isHostMessage(rawMessage)) {
+    recordFailure("protocol", "invalid_host_message");
     deactivate("invalid_host_message");
     updateStatus({ ...status, error: "Companion returned an invalid message" });
     void broadcastToXboxTabs({
@@ -465,6 +531,7 @@ function handleHostMessage(rawMessage: unknown): void {
   switch (message.type) {
     case "hello_ack":
       if (message.protocol_version !== PROTOCOL_VERSION) {
+        recordFailure("protocol", "protocol_mismatch");
         deactivate("protocol_mismatch");
         updateStatus({ ...status, error: "Companion protocol is incompatible" });
         return;
@@ -514,6 +581,10 @@ function handleHostMessage(rawMessage: unknown): void {
       }
       break;
     case "error":
+      recordFailure(
+        message.code === "invalid_profile" ? "profile" : "bridge",
+        message.code,
+      );
       if (
         message.code === "backend_unavailable" &&
         requestedMode === "auto" &&
@@ -549,6 +620,7 @@ function sendPendingProfile(): void {
 }
 
 function failClosed(error: string, reason: string): void {
+  recordFailure(failureCategory(reason), reason);
   activationRequested = false;
   queuedProfile = null;
   inFlightProfile = null;
@@ -558,6 +630,7 @@ function failClosed(error: string, reason: string): void {
 }
 
 function deactivate(reason: string): void {
+  const hadSession = activeTabId !== null || status.active || activationRequested;
   activationGeneration += 1;
   activationRequested = false;
   queuedProfile = null;
@@ -569,6 +642,10 @@ function deactivate(reason: string): void {
   activeProfile = null;
   activeTabId = null;
   updateStatus({ ...status, active: false });
+  if (hadSession) {
+    diagnostics.stopCapture(reason);
+    scheduleDiagnosticsPersistence();
+  }
 }
 
 async function activateBrowser(profile: Profile): Promise<void> {
@@ -728,6 +805,125 @@ async function broadcastToXboxTabs(message: RuntimeMessage): Promise<void> {
 
 async function sendToTab(tabId: number, message: RuntimeMessage): Promise<void> {
   await chrome.tabs.sendMessage(tabId, message).catch((error: unknown) => {
+    recordFailure("runtime", "tab_message_failed");
     console.warn("Xbox Input Bridge tab communication failed:", error);
   });
+}
+
+async function loadDiagnosticsPreferences(): Promise<void> {
+  try {
+    const stored = await chrome.storage.local.get([
+      DIAGNOSTICS_PERSIST_STORAGE_KEY,
+      DIAGNOSTICS_SNAPSHOT_STORAGE_KEY,
+      PERFORMANCE_OVERLAY_STORAGE_KEY,
+    ]);
+    diagnosticsPersistence = stored[DIAGNOSTICS_PERSIST_STORAGE_KEY] === true;
+    performanceOverlay = stored[PERFORMANCE_OVERLAY_STORAGE_KEY] === true;
+    if (diagnosticsPersistence) diagnostics.restore(stored[DIAGNOSTICS_SNAPSHOT_STORAGE_KEY]);
+  } catch {
+    diagnostics.recordFailure("storage", "diagnostics_read_failed");
+  }
+}
+
+function scheduleDiagnosticsPersistence(): void {
+  if (!diagnosticsPersistence || diagnosticsPersistenceTimer !== null) return;
+  diagnosticsPersistenceTimer = setTimeout(() => {
+    diagnosticsPersistenceTimer = null;
+    void persistDiagnosticsNow();
+  }, 5_000);
+}
+
+async function persistDiagnosticsNow(): Promise<void> {
+  if (diagnosticsPersistenceTimer !== null) {
+    clearTimeout(diagnosticsPersistenceTimer);
+    diagnosticsPersistenceTimer = null;
+  }
+  try {
+    if (diagnosticsPersistence) {
+      await chrome.storage.local.set({
+        [DIAGNOSTICS_SNAPSHOT_STORAGE_KEY]: diagnostics.snapshot(),
+      });
+    } else {
+      await chrome.storage.local.remove(DIAGNOSTICS_SNAPSHOT_STORAGE_KEY);
+    }
+  } catch {
+    diagnostics.recordFailure("storage", "diagnostics_write_failed");
+  }
+}
+
+function diagnosticsResponse(): {
+  snapshot: DiagnosticsSnapshot;
+  persistence: boolean;
+  performance_overlay: boolean;
+  export: ReturnType<typeof buildDiagnosticsExport>;
+} {
+  const snapshot = diagnostics.snapshot();
+  return {
+    snapshot,
+    persistence: diagnosticsPersistence,
+    performance_overlay: performanceOverlay,
+    export: buildDiagnosticsExport(snapshot, {
+      extensionVersion: chrome.runtime.getManifest().version ?? "unknown",
+      protocolVersion: PROTOCOL_VERSION,
+      profileSchemaVersion: PROFILE_SCHEMA_VERSION,
+      persistence: diagnosticsPersistence,
+      performanceOverlay,
+      backend: status.backend,
+    }),
+  };
+}
+
+function performanceSummary(): import("./protocol").PerformanceSummary {
+  const snapshot = diagnostics.snapshot();
+  const average = (value: DiagnosticsSnapshot["durations"]["mapping_processing_ms"]): number | null =>
+    value.count > 0 ? Math.round(value.sum_ms / value.count * 1000) / 1000 : null;
+  return {
+    input_events_hz: snapshot.rates.input_events_hz,
+    batches_hz: snapshot.rates.batches_hz,
+    average_batch_size: snapshot.rates.average_batch_size,
+    mapping_average_ms: average(snapshot.durations.mapping_processing_ms),
+    pipeline_estimate_average_ms: average(snapshot.durations.extension_pipeline_estimate_ms),
+    dropped_events: snapshot.totals.dropped_events,
+    capture_uptime_ms: snapshot.capture.uptime_ms,
+  };
+}
+
+async function runBridgeSelfTest(): Promise<{
+  contentScript: boolean;
+  mainWorld: boolean;
+  watchdog: boolean;
+}> {
+  const tabs = await chrome.tabs.query({
+    url: ["https://www.xbox.com/*/play*", "https://www.xbox.com/play*"],
+  });
+  for (const tab of tabs) {
+    if (tab.id === undefined) continue;
+    try {
+      const response: unknown = await chrome.tabs.sendMessage(tab.id, { type: "diagnostics_ping" });
+      if (typeof response === "object" && response !== null &&
+        "contentScript" in response && response.contentScript === true) {
+        return {
+          contentScript: true,
+          mainWorld: "mainWorld" in response && response.mainWorld === true,
+          watchdog: "watchdog" in response && response.watchdog === true,
+        };
+      }
+    } catch {
+      recordFailure("bridge", "self_test_handshake_failed");
+    }
+  }
+  return { contentScript: false, mainWorld: false, watchdog: false };
+}
+
+function recordFailure(category: DiagnosticFailureCategory, code: string): void {
+  diagnostics.recordFailure(category, code);
+  scheduleDiagnosticsPersistence();
+}
+
+function failureCategory(reason: string): DiagnosticFailureCategory {
+  if (reason.includes("profile")) return "profile";
+  if (reason.includes("protocol") || reason.includes("message")) return "protocol";
+  if (reason.includes("watchdog") || reason.includes("expired")) return "watchdog";
+  if (reason.includes("bridge") || reason.includes("companion")) return "bridge";
+  return "capture";
 }

@@ -8,10 +8,10 @@
   "scripts": {
     "build": "npm run build --workspace @xib/extension",
     "check": "npm run check --workspace @xib/extension",
-    "test": "npm run test --workspace @xib/extension"
+    "test": "npm run test --workspace @xib/extension",
+    "integration:browser": "node scripts/browser-integration.mjs"
   },
   "engines": {
     "node": ">=22"
   }
 }
-

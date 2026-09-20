@@ -4,6 +4,7 @@ import {
   type Profile,
 } from "./profile-schema";
 import { isGameIdentity, type GameIdentity } from "./game-profile";
+import { isDiagnosticsSample, type DiagnosticsSample } from "./diagnostics";
 
 export const PROTOCOL_VERSION = 1;
 export { PROFILE_SCHEMA_VERSION };
@@ -69,6 +70,16 @@ export interface OverlayProfileSummary {
 
 export type OverlayMatch = "unknown" | "matched" | "ambiguous";
 
+export interface PerformanceSummary {
+  input_events_hz: number;
+  batches_hz: number;
+  average_batch_size: number;
+  mapping_average_ms: number | null;
+  pipeline_estimate_average_ms: number | null;
+  dropped_events: number;
+  capture_uptime_ms: number;
+}
+
 export type RuntimeMessage =
   | { type: "arm_capture" }
   | { type: "browser_activate"; profile: Profile }
@@ -82,6 +93,11 @@ export type RuntimeMessage =
   | { type: "get_status" }
   | { type: "game_identity_changed"; identity: GameIdentity | null }
   | { type: "get_overlay_state" }
+  | { type: "get_diagnostics" }
+  | { type: "reset_diagnostics" }
+  | { type: "set_diagnostics_preferences"; persistence: boolean; performance_overlay: boolean }
+  | { type: "diagnostics_sample"; sample: DiagnosticsSample }
+  | { type: "diagnostics_ping" }
   | { type: "select_profile"; profile_id: string; associate: boolean }
   | {
       type: "update_profile_sensitivity";
@@ -99,6 +115,8 @@ export type RuntimeMessage =
       active_profile_id: string;
       profiles: OverlayProfileSummary[];
       capture_active: boolean;
+      performance_enabled: boolean;
+      performance: PerformanceSummary;
     }
   | {
       type: "status_update";
@@ -149,8 +167,17 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     case "capture_heartbeat":
     case "get_status":
     case "get_overlay_state":
+    case "get_diagnostics":
+    case "reset_diagnostics":
+    case "diagnostics_ping":
     case "browser_deactivate":
       return hasExactKeys(value, ["type"]);
+    case "set_diagnostics_preferences":
+      return hasExactKeys(value, ["type", "persistence", "performance_overlay"]) &&
+        typeof value.persistence === "boolean" &&
+        typeof value.performance_overlay === "boolean";
+    case "diagnostics_sample":
+      return hasExactKeys(value, ["type", "sample"]) && isDiagnosticsSample(value.sample);
     case "browser_activate":
       return hasExactKeys(value, ["type", "profile"]) && isProfile(value.profile);
     case "browser_events":
@@ -191,7 +218,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   function isOverlayState(value: Record<string, unknown>): boolean {
     return hasExactKeys(value, [
       "type", "identity", "match", "candidate_profile_ids", "active_profile_id",
-      "profiles", "capture_active",
+      "profiles", "capture_active", "performance_enabled", "performance",
     ]) &&
       (value.identity === null || isGameIdentity(value.identity)) &&
       (value.match === "unknown" || value.match === "matched" || value.match === "ambiguous") &&
@@ -203,7 +230,23 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
       value.profiles.length >= 1 &&
       value.profiles.length <= 20 &&
       value.profiles.every(isOverlayProfileSummary) &&
-      typeof value.capture_active === "boolean";
+      typeof value.capture_active === "boolean" &&
+      typeof value.performance_enabled === "boolean" &&
+      isPerformanceSummary(value.performance);
+  }
+
+  function isPerformanceSummary(value: unknown): value is PerformanceSummary {
+    if (!isRecord(value) || !hasExactKeys(value, [
+      "input_events_hz", "batches_hz", "average_batch_size", "mapping_average_ms",
+      "pipeline_estimate_average_ms", "dropped_events", "capture_uptime_ms",
+    ])) return false;
+    return ["input_events_hz", "batches_hz", "average_batch_size", "dropped_events",
+      "capture_uptime_ms"].every((key) =>
+      typeof value[key] === "number" && Number.isFinite(value[key]) && Number(value[key]) >= 0
+    ) &&
+      [value.mapping_average_ms, value.pipeline_estimate_average_ms].every((entry) =>
+        entry === null || (typeof entry === "number" && Number.isFinite(entry) && entry >= 0)
+      );
   }
 
   function isOverlayProfileSummary(value: unknown): boolean {

@@ -19,6 +19,17 @@ only while the user has explicitly activated capture.
   extension storage.
 - Diagnostic messages contain coarse connection and error state, never raw
   input payloads.
+- Local diagnostics use a rolling 60-sample aggregate window plus fixed-size
+  counters and histograms for event/batch rates,
+  batch size, same-realm mapping duration, an explicitly labeled bridge
+  round-trip estimate, dropped events, lifecycle reasons, profile switches, and
+  capture uptime. Individual keys, mouse deltas, and raw event histories are
+  never retained.
+- Diagnostics are ephemeral by default. Persisting aggregate diagnostics
+  requires an explicit option and can be disabled or reset at any time.
+- Manual diagnostics export contains versions, configuration summaries,
+  aggregates, and bounded categorized failure codes. It excludes input
+  payloads, query strings, account/session tokens, and browsing history.
 
 Capture stops on user request, pointer-lock loss, page blur, hidden document,
 companion disconnect, protocol error, input overflow, or watchdog timeout.

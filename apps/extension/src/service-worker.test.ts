@@ -31,7 +31,10 @@ describe("service worker activation ownership", () => {
         getManifest: () => ({ permissions: ["storage"] }),
         sendMessage: vi.fn(async () => {}),
       },
-      storage: { local: { get: storageGet, set: storageSet }, onChanged: { addListener: vi.fn() } },
+      storage: {
+        local: { get: storageGet, set: storageSet, remove: vi.fn(async () => {}) },
+        onChanged: { addListener: vi.fn() },
+      },
       tabs: { sendMessage: sendTab, query: vi.fn(async () => []),
         onRemoved: { addListener: vi.fn() }, onUpdated: { addListener: vi.fn() } },
     });
@@ -62,6 +65,13 @@ describe("service worker activation ownership", () => {
     expect(sendTab).toHaveBeenCalledWith(1, { type: "stop_capture", reason: "capture_replaced" });
     await message({ type: "capture_stopped", reason: "late_stop" }, 1);
     expect((await message({ type: "get_status" })).active).toBe(true);
+    const diagnostics = await new Promise<any>(resolve => listener(
+      { type: "get_diagnostics" },
+      { id: "extension-id", url: "chrome-extension://extension-id/options.html" },
+      resolve,
+    ));
+    expect(diagnostics.snapshot.capture.active).toBe(true);
+    expect(diagnostics.snapshot.capture.sessions).toBe(2);
   });
 
   it("does not report success when the content script rejects activation", async () => {
@@ -259,5 +269,32 @@ describe("service worker activation ownership", () => {
     await Promise.all([selecting, tuning]);
     expect(storedDocument.active_profile_id).toBe("fps");
     expect(storedDocument.profiles[1]!.mouse.hip.sensitivity_x).toBe(0.041);
+  });
+
+  it("keeps diagnostics ephemeral until an extension page explicitly opts in", async () => {
+    const extensionSender: chrome.runtime.MessageSender = {
+      id: "extension-id",
+      url: "chrome-extension://extension-id/options.html",
+    };
+    const request = (value: object): Promise<any> =>
+      new Promise(resolve => listener(value, extensionSender, resolve));
+    const initial = await request({ type: "get_diagnostics" });
+    expect(initial.persistence).toBe(false);
+    expect(initial.performance_overlay).toBe(false);
+
+    const enabled = await request({
+      type: "set_diagnostics_preferences",
+      persistence: true,
+      performance_overlay: true,
+    });
+    expect(enabled.persistence).toBe(true);
+    expect(enabled.performance_overlay).toBe(true);
+    expect(storageSet).toHaveBeenCalledWith(expect.objectContaining({
+      "xib.diagnostics_persist": true,
+      "xib.performance_overlay": true,
+    }));
+    expect(storageSet).toHaveBeenCalledWith(expect.objectContaining({
+      "xib.diagnostics_snapshot": expect.any(Object),
+    }));
   });
 });

@@ -234,6 +234,39 @@ describe("content capture lifecycle", () => {
     expect(root.requestPointerLock).not.toHaveBeenCalled();
   });
 
+  it("does not update performance UI while the quick overlay is closed", async () => {
+    const { createStarterProfiles } = await import("./profile-schema");
+    const profile = createStarterProfiles().profiles[0]!;
+    runtime({
+      type: "overlay_state",
+      identity: null,
+      match: "unknown",
+      candidate_profile_ids: [],
+      active_profile_id: profile.id,
+      profiles: [{
+        id: profile.id,
+        name: profile.name,
+        hip_x: profile.mouse.hip.sensitivity_x,
+        hip_y: profile.mouse.hip.sensitivity_y,
+        ads_x: profile.mouse.ads.sensitivity_x,
+        ads_y: profile.mouse.ads.sensitivity_y,
+      }],
+      capture_active: false,
+      performance_enabled: true,
+      performance: {
+        input_events_hz: 120,
+        batches_hz: 60,
+        average_batch_size: 2,
+        mapping_average_ms: 0.2,
+        pipeline_estimate_average_ms: 0.7,
+        dropped_events: 0,
+        capture_uptime_ms: 1000,
+      },
+    });
+    expect(quick.refresh).not.toHaveBeenCalled();
+    expect(quick.show).not.toHaveBeenCalled();
+  });
+
   it("rejects runtime commands that do not come from the extension", () => {
     runtime({ type: "arm_capture" }, { id: "page-script" });
     expect(button.showPopover).not.toHaveBeenCalled();
@@ -259,6 +292,16 @@ describe("content capture lifecycle", () => {
         ads_y: profile.mouse.ads.sensitivity_y,
       })),
       capture_active: true,
+      performance_enabled: false,
+      performance: {
+        input_events_hz: 0,
+        batches_hz: 0,
+        average_batch_size: 0,
+        mapping_average_ms: null,
+        pipeline_estimate_average_ms: null,
+        dropped_events: 0,
+        capture_uptime_ms: 0,
+      },
     });
     expect(quick.show).not.toHaveBeenCalled();
     location.href = "https://www.xbox.com/en-US/play/games/second-game/SECOND";

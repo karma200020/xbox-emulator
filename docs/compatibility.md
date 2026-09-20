@@ -22,24 +22,40 @@ Explicit pointer-lock activation, bridge retry/acknowledgement, stable virtual
 gamepad indexing, and immediate browser stop paths are implemented. Live
 Chrome/Edge xCloud sessions remain the release compatibility gate.
 
-## Browser lifecycle checks (2026-09-20)
+## Automated browser matrix (2026-09-20)
 
-Automated checks on the actual `https://www.xbox.com/en-US/play` route passed
-in Chrome for Testing 153.0.8010.52 and Microsoft Edge 146.0.3856.109:
-pointer-lock activation, held-button mapping, 32-second service-worker liveness,
-neutralization on pointer-lock loss, reactivation, live profile replacement,
-and SPA navigation cleanup.
+Command:
 
-Fullscreen container/video fixtures on the same route also passed: top-layer
-activation prompt visibility in containers, click activation, Ctrl+Alt+G
-start/stop in native video fullscreen, and preserving fullscreen when stopping
-via the shortcut.
+```powershell
+npm run integration:browser -- --browser all
+```
 
-These are browser plumbing checks, not authenticated cloud-game sessions.
-Game launch, in-game behavior, physical-controller hardware coexistence, and
-end-to-end latency still need game/hardware testing. Unit coverage exercises
-simulated physical-controller index collisions and delayed activation/bridge
-acknowledgements.
+The runner uses a fresh temporary profile, loads the bundled extension, visits
+the public unauthenticated `https://www.xbox.com/en-US/play` route, and deletes
+the profile afterward. It does not use credentials or launch a game.
+
+| Environment | Result | Exact automated coverage |
+| --- | --- | --- |
+| Microsoft Edge 146.0.3856.109, Windows x64 | Pass | Unpacked MV3 load, exact-route injection, idle content/MAIN handshake, active watchdog response, pointer-lock activation, held W mapping, 32-second held input with the service-worker debugger detached and worker recovery afterward, atomic profile switch, Escape neutralization, container and video fullscreen shortcuts with fullscreen preserved on stop, SPA navigation cleanup |
+| Google Chrome Stable 153.0.8010.48, Windows x64 | Blocked | Browser version was detected, but this branded Stable build rejected command-line unpacked-extension loading; no extension behavior is claimed for this run |
+
+The Edge result is browser plumbing coverage, not a game compatibility result.
+Unit coverage also exercises physical-controller index collisions, delayed
+activation/bridge acknowledgements, aggregate bounds, privacy-safe export,
+failure counters, self-test results, localization completeness, and closed
+overlay lifecycle.
+
+## Explicitly untested
+
+- authenticated game launch and in-game response;
+- coexistence with physical-controller hardware;
+- network or game-stream latency;
+- production Windows virtual-controller drivers and installed games;
+- universal browser, game, hardware, or regional compatibility.
+
+The diagnostics panel intentionally labels MAIN-world mapping duration as
+measured and isolated-world bridge round trip as estimated. Neither value is a
+network-latency or game-stream-latency measurement.
 
 ## Not yet enabled
 
@@ -48,7 +64,7 @@ acknowledgements.
 - Chrome Web Store distribution
 - signed companion installer and update channel
 
-When a production backend is selected, this document will become a dated matrix
+When a production backend is selected, this document will expand into a dated matrix
 of Windows version and architecture, browser version, xCloud title/genre, local
 game input API, fullscreen mode, launcher, privilege level, and anti-cheat
 result. A pass means tested behavior for that exact configuration, not universal

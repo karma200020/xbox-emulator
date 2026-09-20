@@ -16,6 +16,7 @@ import {
 } from "./overlay-shortcut";
 import { parseOverlayState, QuickOverlay } from "./quick-overlay";
 import { t } from "./i18n";
+import type { DiagnosticsSample } from "./diagnostics";
 
 const FLUSH_INTERVAL_MS = 8;
 
@@ -35,6 +36,11 @@ let activationPending = false;
 let overlayShortcut: OverlayShortcutId = DEFAULT_OVERLAY_SHORTCUT;
 let observedHref = "";
 let pendingAmbiguousState: Extract<RuntimeMessage, { type: "overlay_state" }> | null = null;
+let diagnosticSample: DiagnosticsSample = emptyDiagnosticSample();
+let lastDiagnosticReport = 0;
+let diagnosticBatchSequence = 0;
+const pendingDiagnosticBatches = new Map<number, number>();
+const pendingDiagnosticPings = new Map<string, (healthy: boolean) => void>();
 
 const quickOverlay = new QuickOverlay(document, {
   getState: () => requestOverlayState({ type: "get_overlay_state" }),
@@ -69,6 +75,10 @@ chrome.runtime.onMessage.addListener((rawMessage: unknown, sender, sendResponse)
     browserActive = false;
     bridge({ command: "deactivate" });
   }
+  if (rawMessage.type === "diagnostics_ping") {
+    void runBridgeSelfTest().then(sendResponse);
+    return true;
+  }
   if (rawMessage.type === "overlay_state") {
     pendingAmbiguousState = rawMessage.match === "ambiguous" ? rawMessage : null;
     if (quickOverlay.isOpen()) {
@@ -92,6 +102,8 @@ async function activateBrowser(
     bridgeConnection ??= connectPageBridge();
     try {
       bridgePort = await bridgeConnection;
+      bridgePort.addEventListener?.("message", receiveBridgeDiagnostics);
+      bridgePort.start?.();
     } finally {
       bridgeConnection = null;
     }
@@ -292,6 +304,8 @@ function stopCapture(reason: string): void {
   flushTimer = null;
   events = [];
   needsMouseNeutral = false;
+  reportDiagnostics(true);
+  pendingDiagnosticBatches.clear();
   bridge({ command: "deactivate" });
   if (document.pointerLockElement === document.documentElement) {
     document.exitPointerLock();
@@ -312,8 +326,15 @@ function bridge(detail: Readonly<Record<string, unknown>>): void {
 }
 
 function bridgeEvents(inputEvents: InputEvent[], timestampMs: number): void {
+  const batchId = ++diagnosticBatchSequence;
+  pendingDiagnosticBatches.set(batchId, performance.now());
+  if (pendingDiagnosticBatches.size > 32) {
+    const oldest = pendingDiagnosticBatches.keys().next().value as number | undefined;
+    if (oldest !== undefined) pendingDiagnosticBatches.delete(oldest);
+  }
   bridge({
     command: "events",
+    batch_id: batchId,
     message: {
       type: "browser_events",
       events: inputEvents,
@@ -388,10 +409,12 @@ function preventDefault(event: Event): void {
 
 function enqueue(event: InputEvent): void {
   if (events.length >= MAX_BATCH_EVENTS) {
+    diagnosticSample.dropped_events += 1;
     stopCapture("input_overflow");
     return;
   }
   events.push(event);
+  diagnosticSample.input_events += 1;
 }
 
 function flush(): void {
@@ -401,6 +424,7 @@ function flush(): void {
     return;
   }
   const now = performance.now();
+  if (now - lastDiagnosticReport >= 1000) reportDiagnostics();
   if (browserActive && now - lastHeartbeat >= 250) {
     lastHeartbeat = now;
     bridge({ command: "heartbeat" });
@@ -420,6 +444,8 @@ function flush(): void {
   }
   const batch = events;
   events = [];
+  diagnosticSample.batches += 1;
+  diagnosticSample.batch_events += batch.length;
   needsMouseNeutral = batch.some((event) => event.kind === "mouse_move");
   sendInputEvents(batch);
 }
@@ -456,4 +482,107 @@ function isExtensionSender(sender: chrome.runtime.MessageSender): boolean {
 
 function reportRuntimeFailure(error: unknown): void {
   console.warn("Xbox Input Bridge runtime communication failed:", error);
+}
+
+function receiveBridgeDiagnostics(event: MessageEvent<unknown>): void {
+  if (typeof event.data !== "object" || event.data === null || Array.isArray(event.data)) return;
+  const detail = event.data as Record<string, unknown>;
+  if (
+    Object.keys(detail).length === 3 &&
+    detail.type === "xib_diagnostics_v1" &&
+    Number.isSafeInteger(detail.batch_id) &&
+    typeof detail.mapping_duration_ms === "number" &&
+    Number.isFinite(detail.mapping_duration_ms)
+  ) {
+    const batchId = Number(detail.batch_id);
+    const started = pendingDiagnosticBatches.get(batchId);
+    pendingDiagnosticBatches.delete(batchId);
+    if (started !== undefined) {
+      pushBounded(diagnosticSample.mapping_durations_ms, detail.mapping_duration_ms);
+      pushBounded(diagnosticSample.pipeline_estimates_ms, Math.max(0, performance.now() - started));
+    }
+    return;
+  }
+  if (
+    Object.keys(detail).length === 2 &&
+    detail.type === "xib_main_stop_v1" &&
+    typeof detail.reason === "string" &&
+    detail.reason.length <= 64
+  ) {
+    stopCapture(detail.reason);
+    return;
+  }
+  if (
+    Object.keys(detail).length === 3 &&
+    detail.type === "xib_diagnostics_pong_v1" &&
+    typeof detail.nonce === "string" &&
+    typeof detail.watchdog === "boolean"
+  ) {
+    pendingDiagnosticPings.get(detail.nonce)?.(detail.watchdog);
+    pendingDiagnosticPings.delete(detail.nonce);
+  }
+}
+
+async function runBridgeSelfTest(): Promise<{
+  contentScript: true;
+  mainWorld: boolean;
+  watchdog: boolean;
+}> {
+  try {
+    if (!bridgePort) {
+      bridgeConnection ??= connectPageBridge();
+      try {
+        bridgePort = await bridgeConnection;
+        bridgePort.addEventListener?.("message", receiveBridgeDiagnostics);
+        bridgePort.start?.();
+      } finally {
+        bridgeConnection = null;
+      }
+    }
+    const nonce = crypto.randomUUID();
+    const watchdog = await new Promise<boolean | null>((resolve) => {
+      const timer = window.setTimeout(() => {
+        pendingDiagnosticPings.delete(nonce);
+        resolve(null);
+      }, 500);
+      pendingDiagnosticPings.set(nonce, (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      });
+      bridge({ command: "diagnostics_ping", nonce });
+    });
+    return {
+      contentScript: true,
+      mainWorld: watchdog !== null,
+      watchdog: watchdog === true,
+    };
+  } catch (error) {
+    reportRuntimeFailure(error);
+    return { contentScript: true, mainWorld: false, watchdog: false };
+  }
+}
+
+function reportDiagnostics(force = false): void {
+  if (!force && performance.now() - lastDiagnosticReport < 1_000) return;
+  const sample = diagnosticSample;
+  diagnosticSample = emptyDiagnosticSample();
+  lastDiagnosticReport = performance.now();
+  void send({ type: "diagnostics_sample", sample }).catch(reportRuntimeFailure);
+}
+
+function emptyDiagnosticSample(): DiagnosticsSample {
+  return {
+    input_events: 0,
+    batches: 0,
+    batch_events: 0,
+    dropped_events: 0,
+    mapping_durations_ms: [],
+    pipeline_estimates_ms: [],
+  };
+}
+
+function pushBounded(target: number[], value: number): void {
+  if (!Number.isFinite(value) || value < 0) return;
+  if (target.length >= 32) target.shift();
+  target.push(Math.round(value * 1000) / 1000);
 }

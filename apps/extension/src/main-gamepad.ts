@@ -81,16 +81,37 @@ function receiveBridgeMessage(event: MessageEvent<unknown>): void {
     activate(detail.profile);
   } else if (
     detail.command === "events" &&
-    hasExactKeys(detail, ["command", "message"]) &&
+    (hasExactKeys(detail, ["command", "message"]) ||
+      (hasExactKeys(detail, ["command", "message", "batch_id"]) &&
+        Number.isSafeInteger(detail.batch_id))) &&
     active &&
     isInputEventsMessage(detail.message)
   ) {
+    const started = performance.now();
     update(mapper!.apply(detail.message.events));
+    if (Number.isSafeInteger(detail.batch_id)) {
+      bridgePort?.postMessage({
+        type: "xib_diagnostics_v1",
+        batch_id: detail.batch_id,
+        mapping_duration_ms: Math.max(0, performance.now() - started),
+      });
+    }
   } else if (detail.command === "heartbeat" && hasExactKeys(detail, ["command"]) && active) {
     if (canCapture()) lastHeartbeat = performance.now();
-    else deactivate();
+    else deactivate("capture_context_lost", true);
   } else if (detail.command === "deactivate" && hasExactKeys(detail, ["command"])) {
     deactivate();
+  } else if (
+    detail.command === "diagnostics_ping" &&
+    hasExactKeys(detail, ["command", "nonce"]) &&
+    typeof detail.nonce === "string" &&
+    detail.nonce.length <= 64
+  ) {
+    bridgePort?.postMessage({
+      type: "xib_diagnostics_pong_v1",
+      nonce: detail.nonce,
+      watchdog: watchdog !== null,
+    });
   }
 }
 
@@ -112,12 +133,13 @@ function activate(rawProfile: unknown): void {
   index = firstFreeIndex(Array.from(originalGetGamepads()));
   lastHeartbeat = performance.now();
   watchdog = setInterval(() => {
-    if (!canCapture() || performance.now() - lastHeartbeat > 1500) deactivate();
+    if (!canCapture()) deactivate("capture_context_lost", true);
+    else if (performance.now() - lastHeartbeat > 1500) deactivate("main_watchdog_timeout", true);
   }, 250);
   dispatchGamepadEvent("gamepadconnected");
 }
 
-function deactivate(): void {
+function deactivate(reason = "deactivated", report = false): void {
   if (watchdog !== null) clearInterval(watchdog);
   watchdog = null;
   if (!active) return;
@@ -126,6 +148,7 @@ function deactivate(): void {
   active = false;
   dispatchGamepadEvent("gamepaddisconnected");
   mapper = null;
+  if (report) bridgePort?.postMessage({ type: "xib_main_stop_v1", reason });
 }
 
 function moveToIndex(nextIndex: number): void {
@@ -176,10 +199,14 @@ function canCapture(): boolean {
     document.hasFocus() && document.pointerLockElement === document.documentElement;
 }
 
-window.addEventListener("blur", deactivate);
-window.addEventListener("pagehide", deactivate);
-document.addEventListener("visibilitychange", () => { if (document.hidden) deactivate(); });
-document.addEventListener("pointerlockchange", () => { if (!canCapture()) deactivate(); });
+window.addEventListener("blur", () => deactivate("window_blur", true));
+window.addEventListener("pagehide", () => deactivate("page_hidden", true));
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) deactivate("document_hidden", true);
+});
+document.addEventListener("pointerlockchange", () => {
+  if (!canCapture()) deactivate("pointer_lock_lost", true);
+});
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

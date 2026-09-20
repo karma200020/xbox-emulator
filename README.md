@@ -62,6 +62,11 @@ and an explicit choice stores the product association locally.
 The extension stores settings locally and requests no Native Messaging
 permission. See `docs\browser-only-mode.md` for limitations.
 
+The options page also provides local compatibility self-tests and bounded
+reliability diagnostics. Diagnostics are ephemeral by default; aggregate-only
+persistence and the compact quick-overlay performance status are separate,
+explicit opt-ins. Manual export excludes raw input and browsing data.
+
 ## Languages and accessibility
 
 The bundled interface supports English, Spanish, Brazilian Portuguese, and
@@ -87,12 +92,18 @@ Prerequisites:
 ```powershell
 npm install
 npm run check
+npm test
 npm run build
+npm audit
+npm run integration:browser -- --browser all
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 The unpacked extension is produced in `apps\extension\dist`.
+Browser integration results are written outside the repository by default, and
+temporary browser profiles are removed after each run. The runner does not use
+credentials or enter an authenticated game.
 
 The native host can be exercised without installing it:
 

@@ -16,6 +16,25 @@ export interface QuickOverlayClient {
   ): Promise<OverlayState | null>;
 }
 
+export class OverlayRefreshScheduler {
+  private timer: ReturnType<typeof setInterval> | null = null;
+
+  start(callback: () => void): void {
+    if (this.timer !== null) return;
+    this.timer = setInterval(callback, 1_000);
+  }
+
+  stop(): void {
+    if (this.timer === null) return;
+    clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  isActive(): boolean {
+    return this.timer !== null;
+  }
+}
+
 export class QuickOverlay {
   private panel: HTMLDivElement | null = null;
   private state: OverlayState | null = null;
@@ -23,8 +42,10 @@ export class QuickOverlay {
   private gameText: HTMLElement | null = null;
   private captureText: HTMLElement | null = null;
   private matchText: HTMLElement | null = null;
+  private performanceText: HTMLElement | null = null;
   private statusText: HTMLElement | null = null;
   private requestGeneration = 0;
+  private readonly refreshScheduler = new OverlayRefreshScheduler();
   private previousFocus: HTMLElement | null = null;
   private fields: Record<"hip_x" | "hip_y" | "ads_x" | "ads_y", HTMLInputElement> | null = null;
 
@@ -48,13 +69,17 @@ export class QuickOverlay {
     if (!this.panel!.matches(":popover-open")) this.panel!.showPopover();
     const state = initialState ?? await this.client.getState();
     if (!this.panel || generation !== this.requestGeneration) return;
-    if (state) this.render(state);
-    else this.setStatus(t("profileUnavailable"), true);
+    if (state) {
+      this.render(state);
+    } else {
+      this.setStatus(t("profileUnavailable"), true);
+    }
     if (focus) this.profileSelect?.focus();
   }
 
   close(): void {
     this.requestGeneration += 1;
+    this.refreshScheduler.stop();
     if (!this.panel) return;
     if (this.panel.matches(":popover-open")) this.panel.hidePopover();
     this.panel.remove();
@@ -65,6 +90,7 @@ export class QuickOverlay {
     this.gameText = null;
     this.captureText = null;
     this.matchText = null;
+    this.performanceText = null;
     this.statusText = null;
     this.previousFocus?.focus();
     this.previousFocus = null;
@@ -108,6 +134,18 @@ export class QuickOverlay {
     this.gameText = this.text("p", t("detectedGame", t("unknown")));
     this.captureText = this.text("p", t("captureLabel", t("inactive")));
     this.matchText = this.text("p", "");
+    this.performanceText = this.text("p", "");
+    this.performanceText.hidden = true;
+    this.performanceText.setAttribute("role", "status");
+    this.performanceText.setAttribute("aria-label", t("performanceStatusLabel"));
+    Object.assign(this.performanceText.style, {
+      padding: "8px 10px",
+      color: "#c9d1d9",
+      background: "#0d1117",
+      border: "1px solid #30363d",
+      borderRadius: "5px",
+      fontVariantNumeric: "tabular-nums",
+    });
 
     const profileLabel = this.label(t("profileLabel"));
     this.profileSelect = this.document.createElement("select");
@@ -155,7 +193,7 @@ export class QuickOverlay {
     this.statusText.setAttribute("aria-live", "polite");
     Object.assign(this.statusText.style, { minHeight: "20px", margin: "12px 0 0", color: "#7ee787" });
     panel.append(
-      heading, this.gameText, this.captureText, this.matchText, profileLabel,
+      heading, this.gameText, this.captureText, this.matchText, this.performanceText, profileLabel,
       sensitivityGrid, actions, this.statusText,
     );
     this.panel = panel;
@@ -164,6 +202,8 @@ export class QuickOverlay {
 
   private render(state: OverlayState): void {
     this.state = state;
+    if (state.performance_enabled) this.refreshScheduler.start(() => void this.refresh());
+    else this.refreshScheduler.stop();
     this.gameText!.textContent = state.identity
       ? t("detectedGame", `${state.identity.title_name} (${state.identity.product_id})`)
       : t("detectedGame", t("unknown"));
@@ -173,6 +213,18 @@ export class QuickOverlay {
       : state.match === "matched"
         ? t("uniqueMatch")
         : t("noMatch");
+    this.performanceText!.hidden = !state.performance_enabled;
+    this.performanceText!.textContent = state.performance_enabled
+      ? t("performanceSummary", [
+         state.performance.input_events_hz.toFixed(1),
+         state.performance.batches_hz.toFixed(1),
+         state.performance.mapping_average_ms === null
+           ? t("notMeasured") : `${state.performance.mapping_average_ms.toFixed(3)} ms`,
+         state.performance.pipeline_estimate_average_ms === null
+           ? t("notMeasured") : `${state.performance.pipeline_estimate_average_ms.toFixed(3)} ms`,
+         String(state.performance.dropped_events),
+        ])
+      : "";
     this.profileSelect!.replaceChildren(...state.profiles.map((profile) => {
       const option = this.document.createElement("option");
       option.value = profile.id;

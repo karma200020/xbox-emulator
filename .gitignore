@@ -4,3 +4,4 @@ dist/
 *.log
 *.pdb
 .DS_Store
+browser-integration-*.json

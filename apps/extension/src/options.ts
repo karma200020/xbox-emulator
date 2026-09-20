@@ -40,6 +40,13 @@ import {
   finishOnboarding,
   needsOnboarding,
 } from "./onboarding";
+import {
+  runCompatibilitySelfTests,
+  summarizeSelfTests,
+  testTimer,
+  type SelfTestResult,
+} from "./compatibility-self-test";
+import type { DiagnosticsExport, DiagnosticsSnapshot } from "./diagnostics";
 
 const CONTRAST_STORAGE_KEY = "xib.high_contrast";
 localizeDocument();
@@ -88,6 +95,11 @@ const elements = {
   onboardingProfile: requireElement<HTMLSelectElement>("onboarding-profile"),
   onboardingBack: requireElement<HTMLButtonElement>("onboarding-back"),
   onboardingNext: requireElement<HTMLButtonElement>("onboarding-next"),
+  persistDiagnostics: requireElement<HTMLInputElement>("persist-diagnostics"),
+  performanceOverlay: requireElement<HTMLInputElement>("performance-overlay"),
+  diagnosticsStatus: requireElement<HTMLElement>("diagnostics-status"),
+  diagnosticsMetrics: requireElement<HTMLDListElement>("diagnostics-metrics"),
+  selfTestResults: requireElement<HTMLOListElement>("self-test-results"),
 };
 
 let documentState = createStarterProfiles();
@@ -169,6 +181,12 @@ elements.overlayShortcut.addEventListener("change", () => {
   overlayShortcut = parseOverlayShortcut(elements.overlayShortcut.value);
   markPendingEdit();
 });
+requireElement<HTMLButtonElement>("refresh-diagnostics").addEventListener("click", () => void loadDiagnostics());
+requireElement<HTMLButtonElement>("export-diagnostics").addEventListener("click", () => void exportDiagnostics());
+requireElement<HTMLButtonElement>("reset-diagnostics").addEventListener("click", () => void resetDiagnostics());
+requireElement<HTMLButtonElement>("run-self-tests").addEventListener("click", () => void runSelfTests());
+elements.persistDiagnostics.addEventListener("change", () => void saveDiagnosticsPreferences());
+elements.performanceOverlay.addEventListener("change", () => void saveDiagnosticsPreferences());
 
 for (const input of [
   elements.name,
@@ -352,6 +370,173 @@ window.addEventListener("auxclick", suppressCapturedMouseEvent, true);
 window.addEventListener("contextmenu", suppressCapturedMouseEvent, true);
 
 void load();
+void loadDiagnostics();
+
+interface DiagnosticsResponse {
+  snapshot: DiagnosticsSnapshot;
+  persistence: boolean;
+  performance_overlay: boolean;
+  export: DiagnosticsExport;
+}
+
+async function loadDiagnostics(): Promise<void> {
+  try {
+    const response = await sendRuntime({ type: "get_diagnostics" });
+    if (!isDiagnosticsResponse(response)) throw new Error("Invalid diagnostics response");
+    renderDiagnostics(response);
+    elements.diagnosticsStatus.textContent = t("diagnosticsEphemeralNotice");
+  } catch {
+    elements.diagnosticsStatus.textContent = t("diagnosticsUnavailable");
+  }
+}
+
+async function saveDiagnosticsPreferences(): Promise<void> {
+  try {
+    const response = await sendRuntime({
+      type: "set_diagnostics_preferences",
+      persistence: elements.persistDiagnostics.checked,
+      performance_overlay: elements.performanceOverlay.checked,
+    });
+    if (!isDiagnosticsResponse(response)) throw new Error("Invalid diagnostics response");
+    renderDiagnostics(response);
+    elements.diagnosticsStatus.textContent = t("diagnosticsPreferencesSaved");
+  } catch {
+    elements.diagnosticsStatus.textContent = t("diagnosticsPreferenceFailed");
+  }
+}
+
+async function resetDiagnostics(): Promise<void> {
+  if (!window.confirm(t("resetDiagnosticsConfirm"))) return;
+  try {
+    const response = await sendRuntime({ type: "reset_diagnostics" });
+    if (!isDiagnosticsResponse(response)) throw new Error("Invalid diagnostics response");
+    renderDiagnostics(response);
+    elements.diagnosticsStatus.textContent = t("diagnosticsReset");
+  } catch {
+    elements.diagnosticsStatus.textContent = t("diagnosticsUnavailable");
+  }
+}
+
+async function exportDiagnostics(): Promise<void> {
+  try {
+    const response = await sendRuntime({ type: "get_diagnostics" });
+    if (!isDiagnosticsResponse(response)) throw new Error("Invalid diagnostics response");
+    downloadJson("xbox-input-bridge-diagnostics.json", response.export);
+    elements.diagnosticsStatus.textContent = t("diagnosticsExported");
+  } catch {
+    elements.diagnosticsStatus.textContent = t("diagnosticsUnavailable");
+  }
+}
+
+async function runSelfTests(): Promise<void> {
+  const button = requireElement<HTMLButtonElement>("run-self-tests");
+  button.disabled = true;
+  elements.selfTestResults.replaceChildren();
+  elements.diagnosticsStatus.textContent = t("selfTestsRunning");
+  try {
+    const [timerElapsedMs, bridgeResponse, stored] = await Promise.all([
+      testTimer(),
+      sendRuntime({ type: "diagnostics_ping" }),
+      chrome.storage.local.get(PROFILE_STORAGE_KEY),
+    ]);
+    const bridge = isBridgeSelfTestResponse(bridgeResponse)
+      ? bridgeResponse : { contentScript: false, mainWorld: false, watchdog: false };
+    const results = runCompatibilitySelfTests({
+      userAgent: navigator.userAgent,
+      pointerLockSupported: typeof document.documentElement.requestPointerLock === "function",
+      gamepadApiSupported: typeof navigator.getGamepads === "function",
+      localStorageSupported: Boolean(chrome.storage?.local),
+      profileDocument: stored[PROFILE_STORAGE_KEY] ?? documentState,
+      timerElapsedMs,
+      bridge,
+    });
+    renderSelfTests(results);
+    elements.diagnosticsStatus.textContent = t(`selfTests_${summarizeSelfTests(results)}`);
+  } catch {
+    elements.diagnosticsStatus.textContent = t("selfTestsFailed");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderDiagnostics(response: DiagnosticsResponse): void {
+  elements.persistDiagnostics.checked = response.persistence;
+  elements.performanceOverlay.checked = response.performance_overlay;
+  const snapshot = response.snapshot;
+  const average = (duration: DiagnosticsSnapshot["durations"]["mapping_processing_ms"]): string =>
+    duration.count === 0 ? t("notMeasured") : `${(duration.sum_ms / duration.count).toFixed(3)} ms`;
+  const metrics: [string, string][] = [
+    [t("inputEventRate"), `${snapshot.rates.input_events_hz.toFixed(1)} Hz`],
+    [t("batchRate"), `${snapshot.rates.batches_hz.toFixed(1)} Hz`],
+    [t("averageBatchSize"), snapshot.rates.average_batch_size.toFixed(2)],
+    [t("mappingDuration"), average(snapshot.durations.mapping_processing_ms)],
+    [t("pipelineEstimate"), average(snapshot.durations.extension_pipeline_estimate_ms)],
+    [t("droppedEvents"), String(snapshot.totals.dropped_events)],
+    [t("bridgeReconnects"), String(snapshot.totals.bridge_reconnects)],
+    [t("profileSwitches"), String(snapshot.totals.profile_switches)],
+    [t("captureUptime"), formatDuration(snapshot.capture.uptime_ms)],
+    [t("sessionStopReasons"), Object.entries(snapshot.stop_reasons)
+      .map(([reason, count]) => `${reason}: ${count}`).join(", ") || t("none")],
+    [t("recentFailures"), snapshot.recent_failures
+      .map(({ category, code, count }) => `${category}/${code}: ${count}`).join(", ") || t("none")],
+  ];
+  elements.diagnosticsMetrics.replaceChildren(...metrics.flatMap(([label, value]) => {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const description = document.createElement("dd");
+    description.textContent = value;
+    return [term, description];
+  }));
+}
+
+function renderSelfTests(results: readonly SelfTestResult[]): void {
+  elements.selfTestResults.replaceChildren(...results.map((result) => {
+    const item = document.createElement("li");
+    item.className = `self-test-${result.status}`;
+    const prefix = t(`selfTestStatus_${result.status}`);
+    item.textContent = `${prefix}: ${result.summary}${result.action ? ` ${result.action}` : ""}`;
+    return item;
+  }));
+}
+
+function sendRuntime(message: import("./protocol").RuntimeMessage): Promise<unknown> {
+  return Promise.resolve().then(() => chrome.runtime.sendMessage(message));
+}
+
+function isDiagnosticsResponse(value: unknown): value is DiagnosticsResponse {
+  return typeof value === "object" && value !== null &&
+    "snapshot" in value && "persistence" in value && "performance_overlay" in value &&
+    "export" in value && typeof value.persistence === "boolean" &&
+    typeof value.performance_overlay === "boolean";
+}
+
+function isBridgeSelfTestResponse(value: unknown): value is {
+  contentScript: boolean;
+  mainWorld: boolean;
+  watchdog: boolean;
+} {
+  return typeof value === "object" && value !== null &&
+    "contentScript" in value && typeof value.contentScript === "boolean" &&
+    "mainWorld" in value && typeof value.mainWorld === "boolean" &&
+    "watchdog" in value && typeof value.watchdog === "boolean";
+}
+
+function downloadJson(name: string, value: unknown): void {
+  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function formatDuration(value: number): string {
+  const seconds = Math.floor(value / 1000);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  return `${hours}h ${minutes}m ${seconds % 60}s`;
+}
 
 async function load(): Promise<void> {
   try {
