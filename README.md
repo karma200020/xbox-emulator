@@ -1,7 +1,8 @@
 # Xbox Input Bridge
 
 Xbox Input Bridge maps keyboard and mouse input to a virtual standard gamepad
-inside Xbox Cloud Gaming in Chrome and Microsoft Edge.
+inside Xbox Cloud Gaming in Chrome and Microsoft Edge. Windows native support
+will be added later.
 
 The project is under active development. The current controller backend is a
 safe in-memory implementation for development and tests. A production driver
