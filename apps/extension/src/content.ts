@@ -359,6 +359,8 @@ function installInputListeners(): void {
   window.addEventListener("mousemove", onMouseMove, true);
   window.addEventListener("mousedown", onMouseButton, true);
   window.addEventListener("mouseup", onMouseButton, true);
+  window.addEventListener("pointerdown", onMouseButton, true);
+  window.addEventListener("pointerup", onMouseButton, true);
   window.addEventListener("wheel", onWheel, { capture: true, passive: false });
   window.addEventListener("contextmenu", preventDefault, true);
 }
@@ -369,6 +371,8 @@ function removeInputListeners(): void {
   window.removeEventListener("mousemove", onMouseMove, true);
   window.removeEventListener("mousedown", onMouseButton, true);
   window.removeEventListener("mouseup", onMouseButton, true);
+  window.removeEventListener("pointerdown", onMouseButton, true);
+  window.removeEventListener("pointerup", onMouseButton, true);
   window.removeEventListener("wheel", onWheel, true);
   window.removeEventListener("contextmenu", preventDefault, true);
 }
@@ -391,10 +395,10 @@ function onMouseMove(event: MouseEvent): void {
   enqueue({ kind: "mouse_move", dx: Math.round(event.movementX), dy: Math.round(event.movementY) });
 }
 
-function onMouseButton(event: MouseEvent): void {
+function onMouseButton(event: MouseEvent | PointerEvent): void {
   if (!active || !event.isTrusted || event.button < 0 || event.button > 4) return;
   preventDefault(event);
-  if (event.type === "mousedown") {
+  if (event.type === "mousedown" || event.type === "pointerdown") {
     const pendingRelease = mouseButtonReleaseTimers.get(event.button);
     if (pendingRelease !== undefined) {
       window.clearTimeout(pendingRelease);
