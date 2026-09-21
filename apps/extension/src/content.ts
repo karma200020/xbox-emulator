@@ -19,11 +19,14 @@ import { t } from "./i18n";
 import type { DiagnosticsSample } from "./diagnostics";
 
 const FLUSH_INTERVAL_MS = 8;
+const MIN_MOUSE_BUTTON_PRESS_MS = 40;
 
 let armed = false;
 let active = false;
 let browserActive = false;
 let overlay: HTMLButtonElement | null = null;
+const mouseButtonDownAt = new Map<number, number>();
+const mouseButtonReleaseTimers = new Map<number, number>();
 let events: InputEvent[] = [];
 let flushTimer: number | null = null;
 let needsMouseNeutral = false;
@@ -111,6 +114,7 @@ async function activateBrowser(
   if (!active || generation !== captureGeneration || !canCapture()) return { accepted: false };
   browserActive = true;
   events = [];
+  clearMouseButtonPulses();
   needsMouseNeutral = false;
   bridge({ command: "activate", profile: message.profile });
   return { accepted: true };
@@ -303,6 +307,7 @@ function stopCapture(reason: string): void {
   if (flushTimer !== null) window.clearInterval(flushTimer);
   flushTimer = null;
   events = [];
+  clearMouseButtonPulses();
   needsMouseNeutral = false;
   reportDiagnostics(true);
   pendingDiagnosticBatches.clear();
@@ -389,11 +394,42 @@ function onMouseMove(event: MouseEvent): void {
 function onMouseButton(event: MouseEvent): void {
   if (!active || !event.isTrusted || event.button < 0 || event.button > 4) return;
   preventDefault(event);
-  enqueue({
-    kind: "mouse_button",
-    button: event.button,
-    down: event.type === "mousedown",
-  });
+  if (event.type === "mousedown") {
+    const pendingRelease = mouseButtonReleaseTimers.get(event.button);
+    if (pendingRelease !== undefined) {
+      window.clearTimeout(pendingRelease);
+      mouseButtonReleaseTimers.delete(event.button);
+      enqueue({ kind: "mouse_button", button: event.button, down: false });
+      flush();
+    }
+    if (mouseButtonDownAt.has(event.button)) return;
+    mouseButtonDownAt.set(event.button, performance.now());
+    enqueue({ kind: "mouse_button", button: event.button, down: true });
+    flush();
+    return;
+  }
+  const pressedAt = mouseButtonDownAt.get(event.button);
+  if (pressedAt === undefined) return;
+  mouseButtonDownAt.delete(event.button);
+  const remaining = Math.max(0, MIN_MOUSE_BUTTON_PRESS_MS - (performance.now() - pressedAt));
+  if (remaining === 0) {
+    enqueue({ kind: "mouse_button", button: event.button, down: false });
+    flush();
+    return;
+  }
+  const timer = window.setTimeout(() => {
+    mouseButtonReleaseTimers.delete(event.button);
+    if (!active) return;
+    enqueue({ kind: "mouse_button", button: event.button, down: false });
+    flush();
+  }, remaining);
+  mouseButtonReleaseTimers.set(event.button, timer);
+}
+
+function clearMouseButtonPulses(): void {
+  for (const timer of mouseButtonReleaseTimers.values()) window.clearTimeout(timer);
+  mouseButtonReleaseTimers.clear();
+  mouseButtonDownAt.clear();
 }
 
 function onWheel(event: WheelEvent): void {

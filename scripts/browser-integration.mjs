@@ -216,16 +216,32 @@ async function runBrowser(browser, executable) {
       await chrome.storage.local.set({ [key]: next });
     })()`, true);
     await sleep(750);
+    await evaluate(pageCdp, `(() => {
+      window.__xibLbObserved = false;
+      const sample = () => {
+        if (Array.from(navigator.getGamepads()).some(
+          p => p && p.id.includes("XInput") && p.buttons[4].pressed
+        )) {
+          window.__xibLbObserved = true;
+          return;
+        }
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    })()`);
     await pageCdp.send("Input.dispatchMouseEvent", {
       type: "mousePressed", x: 640, y: 400, button: "left", buttons: 1, clickCount: 1,
     });
-    await waitFor(() => evaluate(pageCdp,
-      "Array.from(navigator.getGamepads()).some(p => p && p.id.includes('XInput') && p.buttons[4].pressed)"),
-    5_000, "left mouse bumper mapping");
     await pageCdp.send("Input.dispatchMouseEvent", {
       type: "mouseReleased", x: 640, y: 400, button: "left", buttons: 0, clickCount: 1,
     });
-    checks.push(pass("mouse_bumper_mapping", "Trusted left click produced virtual LB"));
+    await waitFor(() => evaluate(pageCdp,
+      "window.__xibLbObserved === true"),
+    5_000, "rapid left mouse bumper press");
+    await waitFor(() => evaluate(pageCdp,
+      "Array.from(navigator.getGamepads()).some(p => p && p.id.includes('XInput') && !p.buttons[4].pressed)"),
+    5_000, "rapid left mouse bumper release");
+    checks.push(pass("mouse_bumper_mapping", "Rapid trusted left click produced an observable LB pulse"));
 
     await key(pageCdp, "keyDown", "Escape", 27);
     await key(pageCdp, "keyUp", "Escape", 27);
