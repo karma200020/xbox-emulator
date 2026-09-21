@@ -57,6 +57,28 @@ describe("MAIN-world gamepad lifecycle", () => {
     expect(pad.buttons.every(b => b.value === 0)).toBe(true);
   });
 
+  it("updates cached native-style axes, button arrays, and button objects in place", () => {
+    activate();
+    const pad = nav.getGamepads()[0]!;
+    const axes = pad.axes;
+    const buttons = pad.buttons;
+    const faceA = buttons[0]!;
+    command({ command: "events", message: {
+      type: "browser_events",
+      events: [
+        { kind: "key", code: "KeyW", down: true },
+        { kind: "key", code: "Space", down: true },
+      ],
+      timestamp_ms: 1,
+    } });
+    expect(pad.axes).toBe(axes);
+    expect(pad.buttons).toBe(buttons);
+    expect(pad.buttons[0]).toBe(faceA);
+    expect(axes[1]).toBe(-1);
+    expect(faceA.pressed).toBe(true);
+    expect(faceA.value).toBe(1);
+  });
+
   it("keeps a held key with live heartbeats, then disconnects immediately on lock loss", () => {
     activate();
     for (let i = 0; i < 12; i++) {

@@ -12,6 +12,13 @@ let index = 0;
 let lastHeartbeat = 0;
 let watchdog: ReturnType<typeof setInterval> | null = null;
 
+type MutableGamepadButton = {
+  pressed: boolean;
+  touched: boolean;
+  value: number;
+};
+
+const axes = [...state.axes];
 const buttons = state.buttons.map((value) => gamepadButton(value));
 const gamepad = {
   id: "Xbox 360 Controller (XInput STANDARD GAMEPAD)",
@@ -19,7 +26,7 @@ const gamepad = {
   connected: false,
   timestamp,
   mapping: "standard",
-  axes: [...state.axes],
+  axes,
   buttons,
   vibrationActuator: null,
 } as unknown as Gamepad;
@@ -28,8 +35,8 @@ Object.defineProperties(gamepad, {
   index: { enumerable: true, get: () => index },
   connected: { enumerable: true, get: () => active },
   timestamp: { enumerable: true, get: () => timestamp },
-  axes: { enumerable: true, get: () => [...state.axes] },
-  buttons: { enumerable: true, get: () => state.buttons.map(gamepadButton) },
+  axes: { enumerable: true, get: () => axes },
+  buttons: { enumerable: true, get: () => buttons },
 });
 
 Object.defineProperty(navigator, "getGamepads", {
@@ -143,8 +150,7 @@ function deactivate(reason = "deactivated", report = false): void {
   if (watchdog !== null) clearInterval(watchdog);
   watchdog = null;
   if (!active) return;
-  state = mapper?.reset() ?? neutralState();
-  bumpTimestamp();
+  update(mapper?.reset() ?? neutralState());
   active = false;
   dispatchGamepadEvent("gamepaddisconnected");
   mapper = null;
@@ -164,6 +170,16 @@ function moveToIndex(nextIndex: number): void {
 
 function update(next: XboxState): void {
   state = next;
+  for (let position = 0; position < axes.length; position += 1) {
+    axes[position] = next.axes[position] ?? 0;
+  }
+  for (let position = 0; position < buttons.length; position += 1) {
+    const value = next.buttons[position] ?? 0;
+    const button = buttons[position]!;
+    button.value = value;
+    button.pressed = value > 0.5;
+    button.touched = value > 0;
+  }
   bumpTimestamp();
 }
 
@@ -185,8 +201,8 @@ function dispatchGamepadEvent(
   window.dispatchEvent(event);
 }
 
-function gamepadButton(value: number): GamepadButton {
-  return Object.freeze({ pressed: value > 0.5, touched: value > 0, value });
+function gamepadButton(value: number): MutableGamepadButton {
+  return { pressed: value > 0.5, touched: value > 0, value };
 }
 
 function firstFreeIndex(gamepads: readonly (Gamepad | null)[]): number {
