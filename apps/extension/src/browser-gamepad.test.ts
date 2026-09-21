@@ -26,6 +26,15 @@ describe("BrowserGamepadMapper", () => {
     expect(state.axes).toHaveLength(4);
   });
 
+  it("maps the left mouse button to the left bumper when configured", () => {
+    const value = profile();
+    value.mouse_bindings["0"] = [{ button: BUTTONS.left_shoulder }];
+    const state = new BrowserGamepadMapper(value)
+      .apply([{ kind: "mouse_button", button: 0, down: true }]);
+    expect(state.buttons[4]).toBe(1);
+    expect(state.buttons[7]).toBe(0);
+  });
+
   it("uses unbound arrow keys for D-pad menu navigation", () => {
     const mapper = new BrowserGamepadMapper(profile());
     const state = mapper.apply([

@@ -207,6 +207,26 @@ async function runBrowser(browser, executable) {
       : fail("profile_switch", "Profile replacement did not restore the virtual controller"));
 
     await key(pageCdp, "keyUp", "KeyW", 87);
+    await evaluate(optionsCdp, `(async () => {
+      const key = "xib.profile_document";
+      const stored = await chrome.storage.local.get(key);
+      const next = structuredClone(stored[key]);
+      const active = next.profiles.find(profile => profile.id === next.active_profile_id);
+      active.mouse_bindings["0"] = [{ button: 256 }];
+      await chrome.storage.local.set({ [key]: next });
+    })()`, true);
+    await sleep(750);
+    await pageCdp.send("Input.dispatchMouseEvent", {
+      type: "mousePressed", x: 640, y: 400, button: "left", buttons: 1, clickCount: 1,
+    });
+    await waitFor(() => evaluate(pageCdp,
+      "Array.from(navigator.getGamepads()).some(p => p && p.id.includes('XInput') && p.buttons[4].pressed)"),
+    5_000, "left mouse bumper mapping");
+    await pageCdp.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased", x: 640, y: 400, button: "left", buttons: 0, clickCount: 1,
+    });
+    checks.push(pass("mouse_bumper_mapping", "Trusted left click produced virtual LB"));
+
     await key(pageCdp, "keyDown", "Escape", 27);
     await key(pageCdp, "keyUp", "Escape", 27);
     await sleep(250);
