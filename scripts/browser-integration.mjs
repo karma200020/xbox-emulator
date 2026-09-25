@@ -66,7 +66,7 @@ async function runBrowser(browser, executable) {
     }, 20_000, "extension service worker");
     const extensionId = new URL(extensionTarget.url).host;
     checks.push(pass("extension_load", extensionId));
-    if (optionsScreenshot) {
+    {
       const optionsTarget = await browserCdp.send("Target.createTarget", {
         url: `chrome-extension://${extensionId}/options.html`,
       });
@@ -88,12 +88,107 @@ async function runBrowser(browser, executable) {
         return result.result.value === true;
       }, 10_000, "options page load");
       await sleep(500);
-      const screenshot = await optionsCdp.send("Page.captureScreenshot", {
+      if (optionsScreenshot) {
+        const screenshot = await optionsCdp.send("Page.captureScreenshot", {
+          format: "png", captureBeyondViewport: false,
+        });
+        const output = resolve(optionsScreenshot);
+        await mkdir(resolve(output, ".."), { recursive: true });
+        await writeFile(output, Buffer.from(screenshot.data, "base64"));
+      }
+      const editorResult = await evaluate(optionsCdp, `(async () => {
+        const stored = await chrome.storage.local.get("xib.profile_document");
+        const original = stored["xib.profile_document"];
+        if (!original) throw new Error("Starter profiles not initialized");
+        if (document.querySelector("dialog[open]")) {
+          document.getElementById("onboarding-skip").click();
+        }
+        const rowFor = source => Array.from(document.querySelectorAll("#mouse-bindings .binding-row"))
+          .find(row => row.querySelector(".capture-source").dataset.source === source);
+        const addAndMap = (source, target, label) => {
+          document.getElementById("add-mouse").click();
+          const row = rowFor(source);
+          if (!row) throw new Error("Add binding did not create mouse " + source);
+          const select = row.querySelector("select");
+          if (document.activeElement !== select || select.getClientRects().length === 0)
+            throw new Error("New target selector is not visible and focused");
+          select.value = target;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+          if (!rowFor(source).querySelector(".action-name").textContent.startsWith(label))
+            throw new Error("Controller label does not match " + label);
+        };
+        addAndMap("3", "button:256", "LB");
+        addAndMap("4", "left_trigger", "LT");
+        document.getElementById("add-mouse").click();
+        if (document.querySelectorAll("#mouse-bindings .binding-row").length !== 5)
+          throw new Error("Exhausted mouse bindings changed the row count");
+        document.getElementById("save").click();
+        const deadline = performance.now() + 3000;
+        while (performance.now() < deadline) {
+          const value = (await chrome.storage.local.get("xib.profile_document"))["xib.profile_document"];
+          const profile = value.profiles.find(p => p.id === value.active_profile_id);
+          if (profile.mouse_bindings["3"]?.[0]?.button === 256 &&
+              profile.mouse_bindings["4"]?.[0] === "left_trigger") {
+            await chrome.storage.local.set({ "xib.profile_document": original });
+            return true;
+          }
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        throw new Error("Side-button mappings were not saved");
+      })()`, true);
+      checks.push(editorResult === true
+        ? pass("mouse_binding_editor", "Added Mouse 4/5, selected LB/LT, and saved without capture")
+        : fail("mouse_binding_editor", "Side-button editor check did not complete"));
+      for (const width of [1280, 960, 640, 320]) {
+        await optionsCdp.send("Emulation.setDeviceMetricsOverride", {
+          width, height: 800, deviceScaleFactor: 1, mobile: false,
+        });
+        for (const advanced of [false, true]) {
+          const layout = await evaluate(optionsCdp, `(() => {
+            document.documentElement.classList.toggle("advanced", ${advanced});
+            const problems = [];
+            for (const row of document.querySelectorAll(".binding-row")) {
+              const card = row.closest(".card").getBoundingClientRect();
+              const controls = Array.from(row.querySelectorAll("button, select"))
+                .filter(element => element.getClientRects().length > 0);
+              for (const control of controls) {
+                const rect = control.getBoundingClientRect();
+                if (rect.left < card.left || rect.right > card.right ||
+                    rect.top < card.top || rect.bottom > card.bottom)
+                  problems.push("Control extends outside its card");
+              }
+              const remove = row.querySelector(":scope > .danger").getBoundingClientRect();
+              if (remove.width > 43) problems.push("Delete button stretched");
+              for (let i = 0; i < controls.length; i++) {
+                for (let j = i + 1; j < controls.length; j++) {
+                  const a = controls[i].getBoundingClientRect();
+                  const b = controls[j].getBoundingClientRect();
+                  if (a.left < b.right && a.right > b.left &&
+                      a.top < b.bottom && a.bottom > b.top)
+                    problems.push("Controls overlap");
+                }
+              }
+            }
+            return problems;
+          })()`);
+          if (!Array.isArray(layout) || layout.length > 0) {
+            throw new Error(`Binding layout at ${width}px, advanced=${advanced}: ${JSON.stringify(layout)}`);
+          }
+        }
+      }
+      checks.push(pass("binding_layout", "No overflowing/overlapping controls at 320, 640, 960, 1280px in both modes"));
+      await optionsCdp.send("Emulation.setDeviceMetricsOverride", {
+        width: 1280, height: 800, deviceScaleFactor: 1, mobile: false,
+      });
+      await evaluate(optionsCdp, `(() => {
+        document.documentElement.classList.remove("advanced");
+        document.getElementById("mouse-bindings").closest(".card").scrollIntoView();
+      })()`);
+      const layoutScreenshot = await optionsCdp.send("Page.captureScreenshot", {
         format: "png", captureBeyondViewport: false,
       });
-      const output = resolve(optionsScreenshot);
-      await mkdir(resolve(output, ".."), { recursive: true });
-      await writeFile(output, Buffer.from(screenshot.data, "base64"));
+      await writeFile(join(artifactsDir, `binding-layout-${browser}.png`),
+        Buffer.from(layoutScreenshot.data, "base64"));
       await optionsCdp.close();
       await browserCdp.send("Target.closeTarget", { targetId: optionsTarget.targetId });
     }

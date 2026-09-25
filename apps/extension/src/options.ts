@@ -33,7 +33,7 @@ import {
 import { controllerParts } from "./controller-visualization";
 import { localizeDocument, t } from "./i18n";
 import { replaceBindingSource, resolveCapture, type CaptureKind } from "./key-capture";
-import { actionLabelKey, friendlyInputLabel, matchesProfileSearch } from "./pc-actions";
+import { controllerTargetLabel as formatControllerTarget, friendlyInputLabel, matchesProfileSearch } from "./pc-actions";
 import {
   ONBOARDING_STORAGE_KEY,
   activationReady,
@@ -622,17 +622,16 @@ function renderBindings(
     .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
     .map(([source, targets]) => {
       const row = document.createElement("div");
-      row.className = "binding-row";
+      row.className = isMouse ? "binding-row mouse-binding" : "binding-row";
 
       const action = document.createElement("div");
-      const actionNames = targets.map((target) => t(actionLabelKey(selectedProfile(), target)));
       const targetNames = targets.map(controllerTargetLabel);
       const actionTitle = document.createElement("strong");
       actionTitle.className = "action-name";
-      actionTitle.textContent = [...new Set(actionNames)].join(" / ");
+      actionTitle.textContent = targetNames.join(" + ");
       const explanation = document.createElement("span");
       explanation.className = "controller-explanation";
-      explanation.textContent = `${[...new Set(actionNames)].join(" / ")} → ${targetNames.join(" + ")}`;
+      explanation.textContent = `${friendlyInputLabel(source, isMouse, t)} → ${targetNames.join(" + ")}`;
       action.append(actionTitle, explanation);
 
       const sourceInput = document.createElement("button");
@@ -649,7 +648,7 @@ function renderBindings(
       sourceInput.addEventListener("click", () => startSourceCapture(isMouse ? "mouse" : "keyboard", source, sourceInput));
 
       const targetList = document.createElement("div");
-      targetList.className = "target-list advanced-only";
+      targetList.className = isMouse ? "target-list" : "target-list advanced-only";
       targets.forEach((target, targetIndex) => {
         const targetRow = document.createElement("div");
         targetRow.className = "target-row";
@@ -857,12 +856,24 @@ function renameBinding(
 }
 
 function addBinding(isMouse: boolean): void {
-  const bindings = isMouse ? selectedProfile().mouse_bindings : selectedProfile().key_bindings;
-  if (isMouse && Object.keys(bindings).length >= 5) {
-    setStatus(t("allMouseAssigned"), true);
+  if (isMouse) {
+    cancelSourceCapture(false);
+    const bindings = selectedProfile().mouse_bindings;
+    const source = ["0", "1", "2", "3", "4"].find(button => !Object.hasOwn(bindings, button));
+    if (source === undefined) {
+      setStatus(t("allMouseAssigned"), true);
+      return;
+    }
+    bindings[source] = [{ button: BUTTONS.a }];
+    changed(true);
+    setStatus(t("bindingAdded", friendlyInputLabel(source, true, t)));
+    const row = [...elements.mouse.querySelectorAll<HTMLElement>(".binding-row")]
+      .find(candidate => candidate.querySelector<HTMLElement>(".capture-source")?.dataset.source === source);
+    row?.scrollIntoView({ block: "nearest" });
+    row?.querySelector<HTMLSelectElement>("select")?.focus();
     return;
   }
-  startSourceCapture(isMouse ? "mouse" : "keyboard", null);
+  startSourceCapture("keyboard", null);
 }
 
 function duplicateProfile(): void {
@@ -1091,11 +1102,8 @@ function renderController(profile: Profile): void {
     const target = control.dataset.target;
     const part = target ? byTarget.get(target) : undefined;
     const label = target ? controllerTargetLabel(decodeTarget(target) ?? target as Target) : "";
-    const action = part && target
-      ? t(actionLabelKey(profile, decodeTarget(target) ?? target as Target))
-      : "";
     const description = part?.mapped
-      ? t("mappedControl", [`${action} — ${label}`, part.sources.map((source) =>
+      ? t("mappedControl", [label, part.sources.map((source) =>
           friendlyInputLabel(source.replace("Mouse ", ""), source.startsWith("Mouse "), t)).join(", ")])
       : t("unmappedControl", label);
     control.classList.toggle("mapped", part?.mapped === true);
@@ -1106,9 +1114,7 @@ function renderController(profile: Profile): void {
     ...parts.filter(({ mapped }) => mapped).map((part) => {
       const item = document.createElement("li");
       item.textContent = t("mappedControl", [
-        `${t(actionLabelKey(profile, decodeTarget(part.target) ?? part.target as Target))} — ${
-          controllerTargetLabel(decodeTarget(part.target) ?? part.target as Target)
-        }`,
+        controllerTargetLabel(decodeTarget(part.target) ?? part.target as Target),
         part.sources.map((source) =>
           friendlyInputLabel(source.replace("Mouse ", ""), source.startsWith("Mouse "), t)).join(", "),
       ]);
@@ -1241,32 +1247,8 @@ function targetOptions(): [string, string][] {
   ];
 }
 
-function labelTarget(value: string): string {
-  return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
-}
-
 function controllerTargetLabel(target: Target): string {
-  if (typeof target === "string") {
-    const labels: Record<string, string> = {
-      left_x_negative: t("leftStickLeft"),
-      left_x_positive: t("leftStickRight"),
-      left_y_negative: t("leftStickBack"),
-      left_y_positive: t("leftStickForward"),
-      left_trigger: t("leftTrigger"),
-      right_trigger: t("rightTrigger"),
-    };
-    return labels[target] ?? labelTarget(target);
-  }
-  const name = Object.entries(BUTTONS).find(([, value]) => value === target.button)?.[0];
-  const labels: Record<string, string> = {
-    a: t("aButton"), b: t("bButton"), x: t("xButton"), y: t("yButton"),
-    left_thumb: t("leftStickClick"), right_thumb: t("rightStickClick"),
-    left_shoulder: t("leftBumper"), right_shoulder: t("rightBumper"),
-    start: t("menuButton"), back: t("viewButton"), guide: t("guideButton"),
-    dpad_up: t("dpadUp"), dpad_down: t("dpadDown"),
-    dpad_left: t("dpadLeft"), dpad_right: t("dpadRight"),
-  };
-  return name ? labels[name] ?? labelTarget(name) : String(target.button);
+  return formatControllerTarget(target, t);
 }
 
 function starterProfileLabel(profile: Profile): string {

@@ -50,14 +50,21 @@ that surface.
 Click **View / edit mappings** in the extension popup to see keyboard and mouse
 bindings, browse/search bundled PC-oriented FPS, third-person/action, racing,
 platformer, and one-handed accessibility presets, and tune separate hip and
-aim-down-sights (ADS) mouse response. Simple mode leads with familiar actions
-such as Move, Look/Aim, Jump, Interact, Reload, Fire, and Pause; the Xbox target
-is secondary context. **Advanced mode** exposes canonical browser key codes and
-raw controller targets. Action names are preset suggestions because each game
-can interpret controller buttons differently.
+aim-down-sights (ADS) mouse response. Bindings show the actual Xbox controller
+target, such as **RB - Right bumper**, **LB - Left bumper**, **LT - Left trigger**,
+and **RS - Right stick click**, rather than guessing in-game actions.
+For example, **Left Mouse → RB - Right bumper** sends RB regardless of whether
+the game uses it for melee or another action. **Advanced mode** exposes canonical
+browser key codes and controller target selectors. Changing labels does not
+change any saved mappings.
 
 Select a source and press the desired key or mouse button to remap it. `Esc`
 cancels key capture and remains reserved for releasing gameplay capture.
+In **Mouse bindings**, **Add binding** immediately adds the next unused mouse
+button and focuses its controller target selector (initially A). With left,
+middle, and right already assigned, it adds Mouse Back (physical Mouse 4, code 3),
+then Mouse Forward (physical Mouse 5, code 4). Select LB, LT, or another target,
+then save. No side-button press is needed to add a row.
 Profiles can store normalized product IDs,
 game names, and aliases. The extension observes only documented-style
 `/play/games/<title-slug>/<productId>` URLs and SPA navigation; it does not read
