@@ -86,6 +86,35 @@ describe("BrowserGamepadMapper", () => {
     expect(mapper.apply([]).axes.slice(2)).toEqual([0, 0]);
   });
 
+  it("preserves aim and smoothing across key and non-ADS button updates", () => {
+    const value = profile();
+    value.mouse.hip.sensitivity_x = 0.01;
+    value.mouse.hip.smoothing = 0.5;
+    const mapper = new BrowserGamepadMapper(value);
+    mapper.apply([{ kind: "mouse_move", dx: 10, dy: 0 }]);
+    const held = mapper.apply([
+      { kind: "key", code: "KeyW", down: true },
+      { kind: "mouse_button", button: 0, down: true },
+    ]);
+    expect(held.axes).toEqual([0, -1, 0.1, 0]);
+    expect(held.buttons[7]).toBe(1);
+    expect(mapper.apply([{ kind: "mouse_button", button: 0, down: false }]).axes[2]).toBe(0.1);
+    expect(mapper.apply([{ kind: "mouse_move", dx: 20, dy: 0 }]).axes[2]).toBeCloseTo(0.15);
+    expect(mapper.apply([]).axes[2]).toBe(0);
+    expect(mapper.apply([{ kind: "key", code: "KeyW", down: false }]).axes[2]).toBe(0);
+  });
+
+  it("clears preserved aim on ADS changes and capture reset", () => {
+    const value = profile();
+    value.mouse.ads_activation = { type: "mouse_button", button: 2 };
+    const mapper = new BrowserGamepadMapper(value);
+    mapper.apply([{ kind: "mouse_move", dx: 10, dy: 0 }]);
+    expect(mapper.apply([{ kind: "mouse_button", button: 2, down: true }]).axes[2]).toBe(0);
+    mapper.apply([{ kind: "mouse_move", dx: 10, dy: 0 }]);
+    mapper.reset();
+    expect(mapper.apply([{ kind: "key", code: "Space", down: true }]).axes[2]).toBe(0);
+  });
+
   it("switches between hip and ADS response while the configured source is held", () => {
     const value = profile();
     value.mouse.hip.sensitivity_x = 0.01;

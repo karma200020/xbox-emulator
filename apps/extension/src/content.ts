@@ -19,6 +19,7 @@ import { t } from "./i18n";
 import type { DiagnosticsSample } from "./diagnostics";
 
 const FLUSH_INTERVAL_MS = 8;
+const MOUSE_IDLE_MS = 24;
 const MIN_MOUSE_BUTTON_PRESS_MS = 40;
 
 let armed = false;
@@ -30,6 +31,7 @@ const mouseButtonReleaseTimers = new Map<number, number>();
 let events: InputEvent[] = [];
 let flushTimer: number | null = null;
 let needsMouseNeutral = false;
+let lastMouseMovement = 0;
 let bridgePort: MessagePort | null = null;
 let bridgeConnection: Promise<MessagePort> | null = null;
 let captureGeneration = 0;
@@ -387,11 +389,13 @@ function onKey(event: KeyboardEvent): void {
   preventDefault(event);
   if (event.repeat) return;
   enqueue({ kind: "key", code: event.code, down: event.type === "keydown" });
+  flush();
 }
 
 function onMouseMove(event: MouseEvent): void {
   if (!active || !event.isTrusted || (event.movementX === 0 && event.movementY === 0)) return;
   preventDefault(event);
+  lastMouseMovement = performance.now();
   enqueue({ kind: "mouse_move", dx: Math.round(event.movementX), dy: Math.round(event.movementY) });
 }
 
@@ -477,7 +481,7 @@ function flush(): void {
     });
   }
   if (events.length === 0) {
-    if (!needsMouseNeutral) return;
+    if (!needsMouseNeutral || now - lastMouseMovement < MOUSE_IDLE_MS) return;
     needsMouseNeutral = false;
     sendInputEvents([]);
     return;
@@ -486,8 +490,12 @@ function flush(): void {
   events = [];
   diagnosticSample.batches += 1;
   diagnosticSample.batch_events += batch.length;
-  needsMouseNeutral = batch.some((event) => event.kind === "mouse_move");
+  needsMouseNeutral ||= batch.some((event) => event.kind === "mouse_move");
   sendInputEvents(batch);
+  if (needsMouseNeutral && now - lastMouseMovement >= MOUSE_IDLE_MS) {
+    needsMouseNeutral = false;
+    sendInputEvents([]);
+  }
 }
 
 function sendInputEvents(inputEvents: InputEvent[]): void {

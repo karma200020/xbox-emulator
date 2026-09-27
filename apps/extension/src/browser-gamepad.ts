@@ -36,6 +36,7 @@ export class BrowserGamepadMapper {
   readonly #mouseButtons = new Set<number>();
   #previousMouse: [number, number] = [0, 0];
   #previousMode: "hip" | "ads" | null = null;
+  #lastMouseAxes: [number, number] = [0, 0];
 
   constructor(profile: Profile) {
     this.#profile = structuredClone(profile);
@@ -43,6 +44,8 @@ export class BrowserGamepadMapper {
 
   apply(events: readonly InputEvent[]): XboxState {
     const movements: MovementSegment[] = [];
+    let hasMouseMovement = false;
+    let changedMouseMode = false;
     let segment: MovementSegment = { mode: this.#mouseMode(), dx: 0, dy: 0 };
     const finishSegment = (force = false): void => {
       if (force || segment.dx !== 0 || segment.dy !== 0) movements.push(segment);
@@ -54,16 +57,19 @@ export class BrowserGamepadMapper {
         else updateSet(this.#mouseButtons, event.button, event.down);
         const nextMode = this.#mouseMode();
         if (nextMode !== previousMode) {
+          changedMouseMode = true;
           finishSegment(true);
           segment = { mode: nextMode, dx: 0, dy: 0 };
         }
       } else if (event.kind === "mouse_move") {
+        hasMouseMovement = true;
         segment.dx = saturatingAdd(segment.dx, event.dx);
         segment.dy = saturatingAdd(segment.dy, event.dy);
       }
     }
     finishSegment();
-    return this.#state(movements);
+    const preserveMouse = events.length > 0 && !hasMouseMovement && !changedMouseMode;
+    return this.#state(movements, preserveMouse);
   }
 
   reset(): XboxState {
@@ -73,7 +79,7 @@ export class BrowserGamepadMapper {
     return neutralState();
   }
 
-  #state(movements: readonly MovementSegment[]): XboxState {
+  #state(movements: readonly MovementSegment[], preserveMouse: boolean): XboxState {
     const targets: Target[] = [];
     for (const code of this.#keys) {
       if (Object.hasOwn(this.#profile.key_bindings, code)) {
@@ -103,7 +109,8 @@ export class BrowserGamepadMapper {
       else if (target === "left_y_positive") lyPositive = true;
     }
 
-    const mouse = this.#mouseAxes(movements);
+    const mouse = preserveMouse ? this.#lastMouseAxes : this.#mouseAxes(movements);
+    this.#lastMouseAxes = mouse;
     return {
       buttons,
       axes: [
@@ -155,6 +162,7 @@ export class BrowserGamepadMapper {
   }
 
   #resetMouse(): void {
+    this.#lastMouseAxes = [0, 0];
     this.#previousMouse = [0, 0];
     this.#previousMode = null;
   }

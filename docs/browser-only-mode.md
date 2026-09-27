@@ -28,6 +28,29 @@ handshake and retains earlier candidates until their delayed ACKs arrive. The
 MAIN-world shim has no access to extension APIs and cannot forward page data to
 native code.
 
+Keyboard presses and releases flush immediately, including any pending mouse
+movement in event order, rather than waiting for the 8 ms movement batching timer.
+Mouse-button presses also flush immediately. Quick mouse-button releases are
+delayed only until 40 ms after their press to help gamepad polling observe taps;
+longer holds release immediately. Capture loss cancels pending releases and
+neutralizes output.
+
+For sluggish aiming, compare both hip and ADS settings with smoothing `0`, a
+linear curve, and velocity scaling `0`. This removes response filtering without
+claiming to remove streaming latency. Existing saved profiles are not changed
+automatically. The diagnostics bridge round trip excludes time waiting for the
+movement batch and does not measure Xbox network, rendering, or video latency.
+Mouse-to-stick emulation remains subject to each game's controller turn limit.
+
+In browser mode, keyboard and non-ADS button-only updates preserve the last
+right-stick output instead of interrupting aiming. Mouse idle is declared after
+24 ms without a movement event, checked by the 8 ms timer (normally 24-32 ms
+after the last event; browser scheduling can delay it). This bridges short gaps
+between mouse samples without adding a wait before movement is sent. It trades
+a bounded normal stop tail for fewer unintended recentering pulses. Empty
+batches explicitly neutralize aim; ADS changes reset the response, and capture
+loss still neutralizes immediately rather than waiting for the idle timer.
+
 Input batches bypass the service worker, but a one-second control heartbeat keeps
 the worker informed of capture ownership. A restarted worker stops orphaned
 capture rather than silently adopting it. A separate 250 ms page heartbeat lets
@@ -126,7 +149,7 @@ For each input batch and axis, response processing is deterministic:
 4. For consecutive nonzero movement samples, smoothing produces
    `previous × smoothing + current × (1 - smoothing)`.
 
-The first sample after idle or a hip/ADS change is unsmoothed. A zero-movement
+The first sample after idle or a hip/ADS change is unsmoothed. An explicit empty
 batch clears smoothing state and emits a centered right stick immediately;
 reset, capture loss, and deactivation also clear it. Smoothing therefore never
 extends input after capture stops. Sensitivity is bounded to `0.001-0.2`,
